@@ -27,7 +27,6 @@ import {
   Camera,
   CheckCircle2,
   Clock,
-  Droplets,
   Link2,
   Lock,
   LogOut,
@@ -775,13 +774,13 @@ function NavLink({
   )
 }
 
-function LogoMark({ className = 'h-9 w-9' }: { className?: string }) {
+function LogoMark({ className = 'h-14 w-14' }: { className?: string }) {
   return (
-    <span
-      className={`grid shrink-0 place-items-center rounded-xl bg-gradient-to-br from-sky-400 to-blue-700 text-white shadow-[0_8px_24px_-8px_rgba(56,189,248,0.8),inset_0_1px_0_rgba(255,255,255,0.35)] ${className}`}
-    >
-      <Droplets className="h-[55%] w-[55%]" aria-hidden="true" />
-    </span>
+    <img
+      src="/favicon.svg?v=logo26"
+      alt="DrainGRID Logo"
+      className={`dg-brand-logo shrink-0 object-contain bg-transparent ${className}`}
+    />
   )
 }
 
