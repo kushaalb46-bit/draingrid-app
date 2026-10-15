@@ -1,0 +1,22 @@
+{
+  "name": "DrainGRID Field Hub",
+  "short_name": "DrainGRID",
+  "description": "AI-Powered Stormwater Grate Triage & Ward Telemetry for Bengaluru",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#225679",
+  "theme_color": "#225679",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/static/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

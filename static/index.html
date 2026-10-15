@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>BBMP DrainGRID — Municipal Stormwater AI Hub</title>
+  
+  <!-- Inter Font & Tailwind CDN -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Leaflet GIS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace']
+          },
+          colors: {
+            brand: {
+              50: '#f0fdf4',
+              500: '#22c55e',
+              600: '#16a34a',
+              900: '#14532d',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Custom sleek scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+    .glass-panel {
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .leaflet-container {
+      background: #090d16 !important;
+      font-family: inherit;
+    }
+  </style>
+</head>
+<body class="bg-[#0b0f19] text-slate-100 min-h-screen flex flex-col font-sans selection:bg-emerald-500 selection:text-black">
+
+  <!-- TOP APP NAV -->
+  <header class="h-16 border-b border-slate-800/80 px-4 md:px-8 flex items-center justify-between sticky top-0 z-50 glass-panel">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+        <i data-lucide="shield-alert" class="w-5 h-5 text-white"></i>
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="font-extrabold tracking-tight text-lg text-white">Drain<span class="text-emerald-400">GRID</span></span>
+          <span class="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">BBMP Live</span>
+        </div>
+        <p class="text-xs text-slate-400 hidden sm:block">Bengaluru Stormwater & Desilting Operations Command</p>
+      </div>
+    </div>
+
+    <!-- Right Controls -->
+    <div class="flex items-center gap-3">
+      <a href="/api/export-csv" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition shadow-sm">
+        <i data-lucide="file-spreadsheet" class="w-4 h-4 text-emerald-400"></i>
+        <span class="hidden sm:inline">Export CSV</span>
+      </a>
+      <button onclick="refreshData()" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition border border-slate-700" title="Refresh Telemetry">
+        <i data-lucide="refresh-cw" id="refresh-icon" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN VIEWPORT -->
+  <main class="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
+    
+    <!-- LEFT SIDEBAR: METRICS & CONTROLS -->
+    <aside class="w-full lg:w-[420px] flex-shrink-0 border-r border-slate-800/80 flex flex-col bg-[#0d1322] overflow-y-auto max-h-[50vh] lg:max-h-[calc(100vh-4rem)]">
+      
+      <!-- Real-time Status Counter Cards -->
+      <div class="p-4 grid grid-cols-3 gap-2.5 border-b border-slate-800">
+        <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium">
+            <span>Critical</span>
+            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+          </div>
+          <div id="stat-critical" class="text-2xl font-bold text-red-400 mt-1">0</div>
+        </div>
+        <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium">
+            <span>Moderate</span>
+            <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+          </div>
+          <div id="stat-amber" class="text-2xl font-bold text-amber-300 mt-1">0</div>
+        </div>
+        <div class="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium">
+            <span>Resolved</span>
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          </div>
+          <div id="stat-resolved" class="text-2xl font-bold text-emerald-400 mt-1">0</div>
+        </div>
+      </div>
+
+      <!-- Quick Inspection Trigger Box -->
+      <div class="p-4 border-b border-slate-800 bg-slate-900/40">
+        <h3 class="text-xs uppercase font-bold tracking-wider text-slate-400 mb-3 flex items-center justify-between">
+          <span>Manual Field Ingestion</span>
+          <span class="text-[10px] text-emerald-400 font-mono">Vision AI 4o</span>
+        </h3>
+        
+        <div class="space-y-3">
+          <label class="relative flex flex-col items-center justify-center p-4 border-2 border-dashed border-slate-700 hover:border-emerald-500 rounded-xl cursor-pointer bg-slate-800/30 hover:bg-slate-800/60 transition group">
+            <input type="file" id="manual-file-input" accept="image/*" class="hidden" onchange="handleManualUpload(event)" />
+            <i data-lucide="camera" class="w-6 h-6 text-slate-400 group-hover:text-emerald-400 transition mb-1.5"></i>
+            <span class="text-xs font-medium text-slate-300 group-hover:text-white">Snap / Upload Grate Photo</span>
+            <span class="text-[10px] text-slate-500 mt-0.5">JPEG, PNG from field mobile</span>
+          </label>
+
+          <div id="upload-status" class="hidden text-xs py-2 px-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 flex items-center gap-2">
+            <i data-lucide="loader-2" class="w-4 h-4 animate-spin text-emerald-400"></i>
+            <span id="upload-status-text">Analyzing grate condition via OpenRouter...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Incident Stream -->
+      <div class="flex-1 p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-xs uppercase font-bold tracking-wider text-slate-400">Live Incident Feed</h3>
+          <span id="incident-count" class="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300">0 logs</span>
+        </div>
+
+        <div id="incident-list" class="space-y-2.5">
+          <!-- Filled dynamically by JavaScript -->
+          <div class="text-center py-10 text-slate-500 text-xs">
+            Connecting to municipal database...
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- RIGHT MAIN: GIS TELEMETRY MAP -->
+    <div class="flex-1 relative min-h-[50vh] lg:min-h-full">
+      <div id="map" class="w-full h-full"></div>
+
+      <!-- Floating Map Legend -->
+      <div class="absolute bottom-4 right-4 z-[400] glass-panel px-3 py-2 rounded-xl text-xs space-y-1.5 border border-slate-800 shadow-2xl">
+        <div class="font-bold text-[10px] uppercase tracking-wider text-slate-400 mb-1">Severity Matrix</div>
+        <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-red-500 shadow-sm shadow-red-500/50"></span> <span class="text-slate-200">Critical (>70% Clogged)</span></div>
+        <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-sm shadow-amber-400/50"></span> <span class="text-slate-200">Amber (Moderate Clog)</span></div>
+        <div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400/50"></span> <span class="text-slate-200">Safe / Remediated</span></div>
+      </div>
+
+      <!-- Center Crosshair for Targeting GPS -->
+      <div class="absolute top-4 left-4 z-[400] glass-panel px-3 py-1.5 rounded-lg border border-slate-800 text-xs font-mono text-slate-300 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+        <span>BBMP Command Target: Bengaluru Metro</span>
+      </div>
+    </div>
+  </main>
+
+  <!-- RESOLUTION AUDIT MODAL -->
+  <div id="resolve-modal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="bg-[#0f172a] border border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="font-bold text-white text-base flex items-center gap-2">
+          <i data-lucide="check-check" class="w-5 h-5 text-emerald-400"></i>
+          Verify Desilting Resolution
+        </h3>
+        <button onclick="closeResolveModal()" class="text-slate-400 hover:text-white transition">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <p class="text-xs text-slate-300">
+        Upload the "After" work proof image taken by the BBMP field crew. The AI will audit grate clearance before closing Ticket <span id="modal-ticket-id" class="font-bold text-emerald-400 font-mono"></span>.
+      </p>
+
+      <label class="flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-700 hover:border-emerald-500 rounded-xl cursor-pointer bg-slate-900/50 transition group">
+        <input type="file" id="resolve-file-input" accept="image/*" class="hidden" onchange="handleResolveUpload(event)" />
+        <i data-lucide="upload-cloud" class="w-8 h-8 text-slate-400 group-hover:text-emerald-400 transition mb-2"></i>
+        <span class="text-xs font-medium text-slate-300">Upload Cleared Grate Photo</span>
+      </label>
+
+      <div id="resolve-feedback" class="hidden text-xs p-3 rounded-lg bg-slate-800 text-slate-300 border border-slate-700"></div>
+
+      <div class="flex justify-end gap-2 pt-2">
+        <button onclick="closeResolveModal()" class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let map;
+    let markersLayer = L.layerGroup();
+    let currentResolveTicketId = null;
+
+    // Initialize UI and GIS
+    window.addEventListener('DOMContentLoaded', () => {
+      lucide.createIcons();
+      initMap();
+      fetchInspections();
+      setInterval(fetchInspections, 8000); // 8-second polling for live updates
+    });
+
+    function initMap() {
+      // Centered on Bengaluru CBD
+      map = L.map('map', { zoomControl: false }).setView([12.9716, 77.5946], 12);
+      
+      L.control.zoom({ position: 'topright' }).addTo(map);
+
+      // High-contrast dark carto tiles
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+        maxZoom: 19
+      }).addTo(map);
+
+      markersLayer.addTo(map);
+    }
+
+    async function fetchInspections() {
+      const refreshIcon = document.getElementById('refresh-icon');
+      if (refreshIcon) refreshIcon.classList.add('animate-spin');
+
+      try {
+        const res = await fetch('/api/history');
+        const data = await res.json();
+        renderData(data);
+      } catch (err) {
+        console.error("Failed to load inspections:", err);
+      } finally {
+        if (refreshIcon) setTimeout(() => refreshIcon.classList.remove('animate-spin'), 600);
+      }
+    }
+
+    function renderData(items) {
+      document.getElementById('incident-count').innerText = `${items.length} records`;
+
+      let critical = 0, amber = 0, resolved = 0;
+      markersLayer.clearLayers();
+
+      const listContainer = document.getElementById('incident-list');
+      listContainer.innerHTML = '';
+
+      if (items.length === 0) {
+        listContainer.innerHTML = `
+          <div class="text-center py-10 text-slate-500 text-xs">
+            No incidents reported yet. Send a drain photo via WhatsApp or upload above.
+          </div>`;
+        return;
+      }
+
+      items.forEach(item => {
+        const isResolved = item.status === 'RESOLVED';
+        const isCritical = item.severity && item.severity.includes('Critical');
+        const isAmber = item.severity && item.severity.includes('Amber');
+
+        if (isResolved) resolved++;
+        else if (isCritical) critical++;
+        else amber++;
+
+        // Add Marker to Map
+        const color = isResolved ? '#22c55e' : isCritical ? '#ef4444' : '#f59e0b';
+        const marker = L.circleMarker([item.latitude, item.longitude], {
+          radius: 8,
+          fillColor: color,
+          color: '#ffffff',
+          weight: 1.5,
+          opacity: 0.9,
+          fillOpacity: 0.8
+        });
+
+        marker.bindPopup(`
+          <div class="text-slate-900 text-xs p-1 leading-relaxed">
+            <strong class="block text-sm font-bold text-slate-950 mb-1">Ticket #${item.id} (${item.status})</strong>
+            <div><strong>Ward:</strong> ${item.assigned_ward || 'Ward 111'}</div>
+            <div><strong>Severity:</strong> ${item.severity}</div>
+            <div><strong>Blockage:</strong> ${item.blockage_type}</div>
+            <div><strong>Action:</strong> ${item.crew_action}</div>
+            <div class="text-[10px] text-slate-500 mt-1">${item.timestamp}</div>
+          </div>
+        `);
+        markersLayer.addLayer(marker);
+
+        // Add Card to Feed
+        const card = document.createElement('div');
+        card.className = `p-3.5 rounded-xl border transition cursor-pointer ${
+          isResolved ? 'bg-slate-900/40 border-slate-800 opacity-60' : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
+        }`;
+        card.onclick = () => {
+          map.flyTo([item.latitude, item.longitude], 15, { duration: 1.2 });
+          marker.openPopup();
+        };
+
+        card.innerHTML = `
+          <div class="flex items-start justify-between gap-2 mb-1.5">
+            <div class="flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full" style="background-color: ${color}"></span>
+              <span class="font-bold text-xs text-white">#${item.id}</span>
+              <span class="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 uppercase">${item.source || 'web'}</span>
+            </div>
+            <span class="text-[10px] text-slate-500 font-mono">${item.timestamp.split(' ')[1] || ''}</span>
+          </div>
+
+          <div class="text-xs font-semibold text-slate-200 mb-0.5">${item.assigned_ward || 'Bangalore Central'}</div>
+          <p class="text-[11px] text-slate-400 leading-snug line-clamp-2">${item.crew_action || 'Inspect grate'}</p>
+
+          <div class="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between">
+            <span class="text-[10px] font-mono text-slate-400">Score: ${item.confidence_score || 85}%</span>
+            ${!isResolved ? `
+              <button onclick="event.stopPropagation(); openResolveModal(${item.id})" class="text-[10px] font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                <i data-lucide="check" class="w-3 h-3"></i> Mark Cleared
+              </button>
+            ` : '<span class="text-[10px] text-emerald-400 font-mono">✓ Remediated</span>'}
+          </div>
+        `;
+        listContainer.appendChild(card);
+      });
+
+      document.getElementById('stat-critical').innerText = critical;
+      document.getElementById('stat-amber').innerText = amber;
+      document.getElementById('stat-resolved').innerText = resolved;
+      lucide.createIcons();
+    }
+
+    async function handleManualUpload(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const statusBox = document.getElementById('upload-status');
+      statusBox.classList.remove('hidden');
+
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const payload = {
+            image_data: reader.result,
+            coords: { lat: 12.9716, lng: 77.5946 }
+          };
+
+          const res = await fetch('/api/triage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const result = await res.json();
+          fetchInspections();
+        } catch (err) {
+          alert("Error analyzing image: " + err.message);
+        } finally {
+          statusBox.classList.add('hidden');
+          e.target.value = '';
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function openResolveModal(ticketId) {
+      currentResolveTicketId = ticketId;
+      document.getElementById('modal-ticket-id').innerText = `#${ticketId}`;
+      document.getElementById('resolve-feedback').classList.add('hidden');
+      document.getElementById('resolve-modal').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function closeResolveModal() {
+      document.getElementById('resolve-modal').classList.add('hidden');
+      currentResolveTicketId = null;
+    }
+
+    async function handleResolveUpload(e) {
+      const file = e.target.files[0];
+      if (!file || !currentResolveTicketId) return;
+
+      const feedback = document.getElementById('resolve-feedback');
+      feedback.classList.remove('hidden');
+      feedback.innerHTML = 'Auditing resolution proof image with AI...';
+
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const res = await fetch('/api/verify-resolution', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: currentResolveTicketId,
+              image_data: reader.result
+            })
+          });
+          const data = await res.json();
+
+          if (data.is_cleared) {
+            feedback.className = 'text-xs p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300';
+            feedback.innerHTML = `<strong>Resolution Verified:</strong> ${data.verification_notes || 'Grate openings clear.'}`;
+            setTimeout(() => {
+              closeResolveModal();
+              fetchInspections();
+            }, 1500);
+          } else {
+            feedback.className = 'text-xs p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300';
+            feedback.innerHTML = `<strong>Verification Incomplete:</strong> Grate still appears blocked. Please clear remaining debris.`;
+          }
+        } catch (err) {
+          feedback.innerHTML = 'Error communicating with verification service: ' + err.message;
+        } finally {
+          e.target.value = '';
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function refreshData() {
+      fetchInspections();
+    }
+  </script>
+</body>
+</html>
