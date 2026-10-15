@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { analyseDrainPhoto } from '../lib/drainVision';
 
 export default function NewTicket() {
     const navigate = useNavigate();
     const [formData, setFormData] = useState({ location: '', description: '' });
     const [file, setFile] = useState<File | null>(null);
-    const [status, setStatus] = useState<'idle' | 'uploading' | 'submitting' | 'success' | 'error'>('idle');
+    const [status, setStatus] = useState<'idle' | 'analysing' | 'uploading' | 'submitting' | 'success' | 'error'>('idle');
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -17,6 +18,9 @@ export default function NewTicket() {
             if (file.size > 10 * 1024 * 1024) {
                 throw new Error('Photo must be 10 MB or smaller.');
             }
+
+            setStatus('analysing');
+            const visualAnalysis = await analyseDrainPhoto(file);
 
             setStatus('uploading');
 
@@ -42,7 +46,8 @@ export default function NewTicket() {
                 body: JSON.stringify({
                     location: formData.location,
                     description: formData.description,
-                    before_image_url: imageUrl
+                    before_image_url: imageUrl,
+                    visual_analysis: visualAnalysis
                 })
             });
 
@@ -115,6 +120,7 @@ export default function NewTicket() {
                         className="w-full mt-8 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 font-bold py-4 rounded-xl transition-all hover:shadow-[0_0_20px_rgba(6,182,212,0.3)] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         {status === 'idle' && 'INITIALIZE UPLOAD'}
+                        {status === 'analysing' && 'ANALYSING PHOTO WITH AI...'}
                         {status === 'uploading' && 'VERIFYING MAGIC BYTES...'}
                         {status === 'submitting' && 'ENCRYPTING PAYLOAD...'}
                         {status === 'success' && 'LOGGED SUCCESSFULLY'}

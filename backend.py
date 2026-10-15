@@ -120,7 +120,7 @@ def detect_blr_area(location: str) -> str:
     first = location.split(",")[0].strip().title()
     return first if 3 <= len(first) <= 22 else "Central Bengaluru"
 
-def run_ai_gatekeeper_and_triage(location: str, description: str, raw_bytes: bytes):
+def run_ai_gatekeeper_and_triage(location: str, description: str, raw_bytes: bytes, visual_analysis: Optional[dict] = None):
     combined = f"{location} {description}".lower()
 
     for bad in INAPPROPRIATE_TERMS:
@@ -139,6 +139,23 @@ def run_ai_gatekeeper_and_triage(location: str, description: str, raw_bytes: byt
             status_code=400,
             detail="AI Gatekeeper Rejected: Submission is unrelated to stormwater drainage or clogging and was blocked from the Worker Terminal."
         )
+
+    # Prefer the browser vision model result when supplied.
+    # The severity mapping is a prototype, not a measured clog percentage.
+    if visual_analysis is not None:
+        if not isinstance(visual_analysis, dict) or visual_analysis.get("method") != "browser-clip-zero-shot":
+            raise HTTPException(status_code=400, detail="Invalid visual analysis result.")
+
+        try:
+            intensity = int(visual_analysis.get("intensity"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid visual severity estimate.")
+
+        if intensity not in {10, 30, 55, 80, 95}:
+            raise HTTPException(status_code=400, detail="Unsupported visual severity estimate.")
+
+        alert = "RED" if intensity >= 75 else "AMBER" if intensity >= 40 else "GREEN"
+        return intensity, alert
 
     high_hits = sum(1 for w in HIGH_SEVERITY_TERMS if w in combined)
     mod_hits = sum(1 for w in MODERATE_SEVERITY_TERMS if w in combined)
@@ -217,7 +234,7 @@ def create_ticket(request: Request, payload: dict = Body(...), db: sqlite3.Conne
         raise HTTPException(status_code=400, detail="Please enter a valid Bengaluru location and drainage description.")
 
     raw_bytes = validate_image_security(before_image_url)
-    intensity, alert = run_ai_gatekeeper_and_triage(location, description, raw_bytes)
+    intensity, alert = run_ai_gatekeeper_and_triage(location, description, raw_bytes, payload.get('visual_analysis'))
     area = detect_blr_area(location)
 
     # Prefix description with AI Triage metadata so native cards also show it clearly
