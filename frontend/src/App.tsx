@@ -15,9 +15,8 @@ function ThinkingOrb({ state, size = 64 }: { state?: string; size?: number; them
   return (
     <span
       style={{ width: size, height: size }}
-      className={`inline-block rounded-full bg-gradient-to-tr from-sky-500/90 via-cyan-300/85 to-teal-200/90 shadow-[0_0_32px_rgba(56,189,248,0.75)] border border-white/50 ${
-        state === 'solving' ? 'animate-spin' : 'animate-pulse'
-      }`}
+      className={`inline-block rounded-full bg-gradient-to-tr from-sky-500/90 via-cyan-300/85 to-teal-200/90 shadow-[0_0_32px_rgba(56,189,248,0.75)] border border-white/50 ${state === 'solving' ? 'animate-spin' : 'animate-pulse'
+        }`}
       aria-hidden="true"
     />
   )
@@ -490,9 +489,8 @@ function Spinner({ onLight = false }: { onLight?: boolean }) {
   return (
     <span
       aria-hidden="true"
-      className={`h-4 w-4 shrink-0 animate-spin rounded-full border-2 ${
-        onLight ? 'border-slate-900/25 border-t-slate-900' : 'border-white/25 border-t-white'
-      }`}
+      className={`h-4 w-4 shrink-0 animate-spin rounded-full border-2 ${onLight ? 'border-slate-900/25 border-t-slate-900' : 'border-white/25 border-t-white'
+        }`}
     />
   )
 }
@@ -674,7 +672,7 @@ function Modal({
       const first = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).find(
         (el) => !el.hasAttribute('data-modal-close') && el.getClientRects().length > 0,
       )
-      ;(first ?? panel).focus()
+        ; (first ?? panel).focus()
     }
     return () => previous?.focus?.()
   }, [])
@@ -724,9 +722,8 @@ function Modal({
         aria-labelledby={labelledBy}
         tabIndex={-1}
         onKeyDown={onKeyDown}
-        className={`glass-strong relative max-h-[92dvh] w-full overflow-y-auto overscroll-contain rounded-t-[28px] outline-none sm:max-h-[90dvh] sm:rounded-[28px] ${widthClass} ${
-          leaving ? 'dg-modal-out' : 'dg-modal-in'
-        }`}
+        className={`glass-strong relative max-h-[92dvh] w-full overflow-y-auto overscroll-contain rounded-t-[28px] outline-none sm:max-h-[90dvh] sm:rounded-[28px] ${widthClass} ${leaving ? 'dg-modal-out' : 'dg-modal-in'
+          }`}
       >
         {closable && (
           <button
@@ -774,12 +771,12 @@ function NavLink({
   )
 }
 
-function LogoMark({ className = 'h-14 w-14' }: { className?: string }) {
+function LogoMark({ }: { className?: string }) {
   return (
     <img
-      src="/favicon.svg?v=logo26"
-      alt="DrainGRID Logo"
-      className={`dg-brand-logo shrink-0 object-contain bg-transparent ${className}`}
+      src="/logo.svg"
+      alt="DrainGRID"
+      className="h-14 w-14 object-contain"
     />
   )
 }
@@ -829,7 +826,7 @@ const BUBBLES: { left: string; size: number; dur: number; delay: number }[] = [
 function Backdrop() {
   return (
     <>
-      
+
       <div className="dg-bubbles" aria-hidden="true">
         {BUBBLES.map((b, i) => (
           <span
@@ -1017,13 +1014,11 @@ function ImageDrop({
             onDragOver={onDragOver}
             onDragLeave={onDragLeave}
             onDrop={onDrop}
-            className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-9 text-center transition duration-300 ${focusRing} ${
-              disabled ? 'pointer-events-none opacity-50' : ''
-            } ${
-              dragging
+            className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-9 text-center transition duration-300 ${focusRing} ${disabled ? 'pointer-events-none opacity-50' : ''
+              } ${dragging
                 ? 'scale-[1.01] border-cyan-300/80 bg-cyan-300/10'
                 : 'border-white/20 bg-white/[0.03] hover:border-sky-300/50 hover:bg-white/[0.06]'
-            }`}
+              }`}
           >
             {processing ? (
               <>
@@ -1446,13 +1441,12 @@ function PasskeyModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: 
                 return (
                   <div
                     key={i}
-                    className={`grid h-14 w-12 place-items-center rounded-2xl border text-2xl font-semibold text-white transition duration-200 ${
-                      error
-                        ? 'border-rose-300/50 bg-rose-400/10'
-                        : active
-                          ? 'border-cyan-200/70 bg-white/10 ring-4 ring-cyan-300/10'
-                          : 'border-white/10 bg-white/[0.04]'
-                    }`}
+                    className={`grid h-14 w-12 place-items-center rounded-2xl border text-2xl font-semibold text-white transition duration-200 ${error
+                      ? 'border-rose-300/50 bg-rose-400/10'
+                      : active
+                        ? 'border-cyan-200/70 bg-white/10 ring-4 ring-cyan-300/10'
+                        : 'border-white/10 bg-white/[0.04]'
+                      }`}
                   >
                     {i < code.length ? '•' : ''}
                   </div>
@@ -1976,11 +1970,10 @@ function LedgerView({
                 role="tab"
                 aria-selected={filter === f.key}
                 onClick={() => setFilter(f.key)}
-                className={`min-h-[40px] rounded-full px-3.5 py-1.5 text-sm font-medium transition duration-300 ${focusRing} ${
-                  filter === f.key
-                    ? 'bg-gradient-to-b from-cyan-200 to-sky-400 text-slate-950 shadow-[0_6px_18px_-6px_rgba(56,189,248,0.8)]'
-                    : 'text-slate-300 hover:text-white'
-                }`}
+                className={`min-h-[40px] rounded-full px-3.5 py-1.5 text-sm font-medium transition duration-300 ${focusRing} ${filter === f.key
+                  ? 'bg-gradient-to-b from-cyan-200 to-sky-400 text-slate-950 shadow-[0_6px_18px_-6px_rgba(56,189,248,0.8)]'
+                  : 'text-slate-300 hover:text-white'
+                  }`}
               >
                 {f.label}
               </button>
@@ -2146,9 +2139,8 @@ function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolea
             >
               <span
                 aria-hidden="true"
-                className={`pointer-events-none absolute inset-y-1 left-1 rounded-full bg-gradient-to-b from-cyan-200 to-sky-400 shadow-[0_8px_24px_-8px_rgba(56,189,248,0.8)] transition-[transform,opacity] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                  view ? 'opacity-100' : 'opacity-0'
-                }`}
+                className={`pointer-events-none absolute inset-y-1 left-1 rounded-full bg-gradient-to-b from-cyan-200 to-sky-400 shadow-[0_8px_24px_-8px_rgba(56,189,248,0.8)] transition-[transform,opacity] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${view ? 'opacity-100' : 'opacity-0'
+                  }`}
                 style={{
                   width: 'calc((100% - 0.5rem) / 3)',
                   transform: `translateX(${Math.max(activeIndex, 0) * 100}%)`,
@@ -2162,9 +2154,8 @@ function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolea
                     to={to}
                     go={go}
                     current={active}
-                    className={`relative z-10 flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[13px] font-medium transition-colors duration-300 active:scale-[0.97] ${focusRing} ${
-                      active ? 'text-slate-950' : 'text-slate-300 hover:text-white'
-                    }`}
+                    className={`relative z-10 flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[13px] font-medium transition-colors duration-300 active:scale-[0.97] ${focusRing} ${active ? 'text-slate-950' : 'text-slate-300 hover:text-white'
+                      }`}
                   >
                     {label}
                     {key === 'worker' && (
@@ -2211,11 +2202,10 @@ function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolea
                           go={go}
                           current={active}
                           onNavigate={() => setMenuOpen(false)}
-                          className={`flex min-h-[52px] items-center gap-3 rounded-2xl px-4 text-[15px] font-medium transition ${focusRing} ${
-                            active
-                              ? 'bg-gradient-to-b from-cyan-200 to-sky-400 text-slate-950'
-                              : 'text-slate-100 hover:bg-white/10'
-                          }`}
+                          className={`flex min-h-[52px] items-center gap-3 rounded-2xl px-4 text-[15px] font-medium transition ${focusRing} ${active
+                            ? 'bg-gradient-to-b from-cyan-200 to-sky-400 text-slate-950'
+                            : 'text-slate-100 hover:bg-white/10'
+                            }`}
                         >
                           <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
                           <span className="flex-1">{label}</span>
@@ -2265,9 +2255,8 @@ function SiteFooter({ view, go }: { view: ViewKey | null; go: Go }) {
                   to={to}
                   go={go}
                   current={view === key}
-                  className={`inline-flex min-h-[44px] items-center rounded-xl text-sm transition hover:text-white ${focusRing} ${
-                    view === key ? 'font-medium text-white' : 'text-slate-300'
-                  }`}
+                  className={`inline-flex min-h-[44px] items-center rounded-xl text-sm transition hover:text-white ${focusRing} ${view === key ? 'font-medium text-white' : 'text-slate-300'
+                    }`}
                 >
                   {label}
                 </NavLink>
@@ -2384,22 +2373,20 @@ function InteractiveWorkerSection(props: any) {
               <button
                 type="button"
                 onClick={() => setAlertFilter('ALL')}
-                className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
-                  alertFilter === 'ALL'
-                    ? 'bg-cyan-400 text-slate-950 shadow'
-                    : 'bg-white/10 text-slate-200 hover:bg-white/20'
-                }`}
+                className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition ${alertFilter === 'ALL'
+                  ? 'bg-cyan-400 text-slate-950 shadow'
+                  : 'bg-white/10 text-slate-200 hover:bg-white/20'
+                  }`}
               >
                 All ({enrichedTickets.length})
               </button>
               <button
                 type="button"
                 onClick={() => setAlertFilter('RED')}
-                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold border transition ${
-                  alertFilter === 'RED'
-                    ? 'bg-rose-500 text-white border-rose-300 shadow-lg'
-                    : 'bg-rose-500/15 text-rose-200 border-rose-400/35 hover:bg-rose-500/25'
-                }`}
+                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold border transition ${alertFilter === 'RED'
+                  ? 'bg-rose-500 text-white border-rose-300 shadow-lg'
+                  : 'bg-rose-500/15 text-rose-200 border-rose-400/35 hover:bg-rose-500/25'
+                  }`}
               >
                 <span className="h-2 w-2 rounded-full bg-rose-300 animate-ping" />
                 RED ≥75% ({counts.RED})
@@ -2407,11 +2394,10 @@ function InteractiveWorkerSection(props: any) {
               <button
                 type="button"
                 onClick={() => setAlertFilter('AMBER')}
-                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold border transition ${
-                  alertFilter === 'AMBER'
-                    ? 'bg-amber-400 text-slate-950 border-amber-200 shadow-lg'
-                    : 'bg-amber-500/15 text-amber-200 border-amber-400/35 hover:bg-amber-500/25'
-                }`}
+                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold border transition ${alertFilter === 'AMBER'
+                  ? 'bg-amber-400 text-slate-950 border-amber-200 shadow-lg'
+                  : 'bg-amber-500/15 text-amber-200 border-amber-400/35 hover:bg-amber-500/25'
+                  }`}
               >
                 <span className="h-2 w-2 rounded-full bg-amber-300" />
                 AMBER 40–74% ({counts.AMBER})
@@ -2419,11 +2405,10 @@ function InteractiveWorkerSection(props: any) {
               <button
                 type="button"
                 onClick={() => setAlertFilter('GREEN')}
-                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold border transition ${
-                  alertFilter === 'GREEN'
-                    ? 'bg-emerald-400 text-slate-950 border-emerald-200 shadow-lg'
-                    : 'bg-emerald-500/15 text-emerald-200 border-emerald-400/35 hover:bg-emerald-500/25'
-                }`}
+                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold border transition ${alertFilter === 'GREEN'
+                  ? 'bg-emerald-400 text-slate-950 border-emerald-200 shadow-lg'
+                  : 'bg-emerald-500/15 text-emerald-200 border-emerald-400/35 hover:bg-emerald-500/25'
+                  }`}
               >
                 <span className="h-2 w-2 rounded-full bg-emerald-300" />
                 GREEN &lt;40% / Clear ({counts.GREEN})
@@ -2441,11 +2426,10 @@ function InteractiveWorkerSection(props: any) {
                   key={a}
                   type="button"
                   onClick={() => setAreaFilter(a)}
-                  className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium border transition ${
-                    areaFilter === a
-                      ? 'bg-white text-slate-950 border-white font-semibold'
-                      : 'bg-white/5 text-slate-200 border-white/15 hover:bg-white/15'
-                  }`}
+                  className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium border transition ${areaFilter === a
+                    ? 'bg-white text-slate-950 border-white font-semibold'
+                    : 'bg-white/5 text-slate-200 border-white/15 hover:bg-white/15'
+                    }`}
                 >
                   {a === 'ALL' ? 'All BLR Areas' : a}
                 </button>
