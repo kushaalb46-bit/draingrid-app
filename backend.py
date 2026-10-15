@@ -142,20 +142,22 @@ def run_ai_gatekeeper_and_triage(location: str, description: str, raw_bytes: byt
 
     high_hits = sum(1 for w in HIGH_SEVERITY_TERMS if w in combined)
     mod_hits = sum(1 for w in MODERATE_SEVERITY_TERMS if w in combined)
-    img_entropy = (int(hashlib.sha256(raw_bytes[:4096]).hexdigest()[:4], 16) % 11) - 3
 
+    # Deterministic rule-based severity estimate.
+    # This is not a measured physical clog percentage.
     if high_hits >= 2:
-        score = 88 + min(9, high_hits * 2)
+        intensity = 92
     elif high_hits == 1:
-        score = 78 + min(10, mod_hits * 3)
-    elif mod_hits >= 2:
-        score = 56 + min(14, mod_hits * 3)
+        intensity = 82 if mod_hits >= 1 else 76
+    elif mod_hits >= 3:
+        intensity = 68
+    elif mod_hits == 2:
+        intensity = 58
     elif mod_hits == 1:
-        score = 45
+        intensity = 43
     else:
-        score = 28
+        intensity = 25
 
-    intensity = max(15, min(98, score + img_entropy))
     if intensity >= 75:
         alert = "RED"
     elif intensity >= 40:
