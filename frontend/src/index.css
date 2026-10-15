@@ -462,3 +462,55 @@
 
 /* Completely remove watermark */
 .dg-watermark { display: none !important; opacity: 0 !important; visibility: hidden !important; }
+
+/* === DRAINGRID IOS 26 LIQUID GLASS & LOGO ENHANCEMENTS === */
+:root {
+  --dg-outer-radius: 28px;
+  --dg-concentric-pad: 10px;
+  --dg-inner-radius: calc(var(--dg-outer-radius) - var(--dg-concentric-pad));
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+}
+
+/* Completely hide any tilted background watermark */
+.dg-watermark {
+  display: none !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
+/* Make standalone navbar logo larger and bright against dark backgrounds */
+.dg-brand-logo,
+header img[src*="favicon.svg"],
+nav img[src*="favicon.svg"] {
+  width: 3.25rem !important;
+  height: 3.25rem !important;
+  background: transparent !important;
+  filter: brightness(1.35) contrast(1.08) drop-shadow(0 0 12px rgba(56, 189, 248, 0.65));
+}
+
+/* Apple iOS 26 Liquid Glass Material with brighter specular highlights */
+.glass,
+.glass-strong {
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.14) 0%,
+    rgba(186, 230, 253, 0.08) 52%,
+    rgba(14, 165, 233, 0.10) 100%
+  ) !important;
+  backdrop-filter: blur(40px) saturate(200%) brightness(1.08) !important;
+  -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.08) !important;
+  border: 1px solid rgba(255, 255, 255, 0.28) !important;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.45),
+    0 20px 48px -12px rgba(2, 8, 23, 0.72),
+    0 0 28px -6px rgba(56, 189, 248, 0.22) !important;
+}
+
+/* ConcentricRectangle helper classes */
+.dg-concentric-outer {
+  border-radius: var(--dg-outer-radius);
+  padding: var(--dg-concentric-pad);
+}
+.dg-concentric-inner {
+  border-radius: var(--dg-inner-radius);
+}
