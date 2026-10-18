@@ -937,7 +937,9 @@ function ThemeToggle({
 }
 
 function LogoMark({ className = 'h-14 w-14' }: { className?: string }) {
-  return <img src="/favicon.svg?v=logo26" alt="DrainGRID" className={`dg-logo ${className} object-contain`} />
+  const theme = useContext(ThemeContext)
+  const src = theme === 'light' ? '/favicon-dark.svg?v=dual1' : '/favicon-light.svg?v=dual1'
+  return <img src={src} alt="DrainGRID" className={`dg-logo ${className} object-contain`} />
 }
 
 function ContactLinks({ className = '' }: { className?: string }) {

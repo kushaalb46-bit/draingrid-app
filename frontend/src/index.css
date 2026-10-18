@@ -188,7 +188,7 @@ html.dark {
   --dg-scrollbar: rgba(147, 197, 253, 0.3);
 
   /* Logo */
-  --dg-logo-filter: brightness(1.3) contrast(1.06) drop-shadow(0 0 12px rgba(56, 189, 248, 0.6));
+  --dg-logo-filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.35));
 }
 
 /* ---------- Theme tokens: LIGHT ---------- */
@@ -348,7 +348,7 @@ html.light {
   --dg-select: rgba(14, 165, 233, 0.28);
   --dg-scrollbar: rgba(51, 65, 85, 0.35);
 
-  --dg-logo-filter: saturate(1.15) contrast(1.05) drop-shadow(0 1px 2px rgba(15, 23, 42, 0.3));
+  --dg-logo-filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.18));
 }
 
 /* ---------- Base ---------- */
