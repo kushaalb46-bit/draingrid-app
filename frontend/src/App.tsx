@@ -1,5 +1,7 @@
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -32,13 +34,35 @@ import {
   Mail,
   MapPin,
   Menu,
+  Moon,
   Phone,
   RefreshCw,
   ShieldCheck,
   Sparkles,
+  Sun,
   TriangleAlert,
   X,
 } from 'lucide-react'
+import * as drainVisionMod from './lib/drainVision'
+
+async function runBrowserDrainVision(imageDataUrl: string): Promise<unknown> {
+  try {
+    const mod = drainVisionMod as Record<string, unknown>
+    const fn =
+      (typeof mod.analyzeDrainImage === 'function' && mod.analyzeDrainImage) ||
+      (typeof mod.analyzeDrainPhoto === 'function' && mod.analyzeDrainPhoto) ||
+      (typeof mod.classifyDrainImage === 'function' && mod.classifyDrainImage) ||
+      (typeof mod.analyzeImage === 'function' && mod.analyzeImage) ||
+      (typeof mod.default === 'function' && mod.default) ||
+      Object.values(mod).find((v) => typeof v === 'function')
+    if (typeof fn === 'function') {
+      return await (fn as (img: string) => Promise<unknown>)(imageDataUrl)
+    }
+  } catch (err) {
+    console.warn('Browser vision analysis fallback:', err)
+  }
+  return undefined
+}
 
 /* ============================================================
    Config
@@ -467,20 +491,109 @@ function useScrollLock(active: boolean) {
 }
 
 /* ============================================================
+   Theme (Dark "Aquatic Obsidian Glass" / Light "Frosted Arctic Acrylic")
+   The choice lives on <html> as the class `dark` or `light`; every colour is a CSS variable in index.css.
+   ============================================================ */
+type Theme = 'dark' | 'light'
+const THEME_KEY = 'draingrid-theme'
+const THEME_COLORS: Record<Theme, string> = { dark: '#041029', light: '#f1f5f9' }
+const ThemeContext = createContext<Theme>('dark')
+
+function readStoredTheme(): Theme | null {
+  try {
+    const v = window.localStorage.getItem(THEME_KEY)
+    return v === 'dark' || v === 'light' ? v : null
+  } catch {
+    return null // storage blocked (private mode, strict settings)
+  }
+}
+
+function systemTheme(): Theme {
+  try {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  } catch {
+    return 'dark'
+  }
+}
+
+function applyTheme(theme: Theme) {
+  const root = document.documentElement
+  root.classList.remove('dark', 'light')
+  root.classList.add(theme)
+  root.style.colorScheme = theme
+  let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+  if (!meta) {
+    meta = document.createElement('meta')
+    meta.name = 'theme-color'
+    document.head.appendChild(meta)
+  }
+  meta.content = THEME_COLORS[theme]
+}
+
+function currentTheme(): Theme {
+  return document.documentElement.classList.contains('light') ? 'light' : 'dark'
+}
+
+// Runs once at load, before React renders anything, so the first paint already has the right theme.
+if (typeof document !== 'undefined') applyTheme(readStoredTheme() ?? systemTheme())
+
+function useTheme() {
+  const [theme, setTheme] = useState<Theme>(currentTheme)
+  const switchTimer = useRef<number | undefined>(undefined)
+
+  const commit = useCallback((next: Theme, persist: boolean) => {
+    const root = document.documentElement
+    root.classList.add('dg-theme-switching') // enables the colour cross-fade
+    window.clearTimeout(switchTimer.current)
+    applyTheme(next)
+    setTheme(next)
+    if (persist) {
+      try {
+        window.localStorage.setItem(THEME_KEY, next)
+      } catch {
+        // storage unavailable; the choice lasts until reload
+      }
+    }
+    switchTimer.current = window.setTimeout(() => root.classList.remove('dg-theme-switching'), 450)
+  }, [])
+
+  // Follow the OS setting live, but only while the person has not picked a theme themselves.
+  useEffect(() => {
+    let mq: MediaQueryList
+    try {
+      mq = window.matchMedia('(prefers-color-scheme: dark)')
+    } catch {
+      return
+    }
+    const onChange = (e: MediaQueryListEvent) => {
+      if (readStoredTheme() === null) commit(e.matches ? 'dark' : 'light', false)
+    }
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [commit])
+
+  useEffect(() => () => window.clearTimeout(switchTimer.current), [])
+
+  const toggleTheme = useCallback(() => commit(theme === 'dark' ? 'light' : 'dark', true), [commit, theme])
+
+  return { theme, toggleTheme }
+}
+
+/* ============================================================
    Style tokens
    ============================================================ */
 const focusRing =
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-200/80 focus-visible:ring-offset-2 focus-visible:ring-offset-[#04122b]'
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--dg-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--dg-page)]'
 
 const btnBase = `inline-flex items-center justify-center gap-2 text-sm font-medium transition duration-300 ease-out active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 ${focusRing}`
-const btnPrimary = `${btnBase} min-h-[48px] rounded-2xl bg-gradient-to-b from-cyan-200 to-sky-400 px-5 py-3 font-semibold text-slate-950 shadow-[0_12px_36px_-12px_rgba(56,189,248,0.9),inset_0_1px_0_rgba(255,255,255,0.7)] enabled:hover:-translate-y-0.5 enabled:hover:brightness-110`
-const btnSecondary = `${btnBase} min-h-[44px] rounded-2xl border border-white/15 bg-white/[0.06] px-5 py-2.5 text-slate-100 enabled:hover:-translate-y-0.5 enabled:hover:bg-white/10`
-const btnGhost = `${btnBase} min-h-[40px] rounded-full px-3 py-1.5 text-xs text-slate-300 enabled:hover:bg-white/10 enabled:hover:text-white`
+const btnPrimary = `${btnBase} min-h-[48px] rounded-2xl dg-accent-bg px-5 py-3 font-semibold dg-on-accent enabled:hover:-translate-y-0.5 enabled:hover:brightness-110`
+const btnSecondary = `${btnBase} min-h-[44px] rounded-2xl border dg-bd-2 dg-fill-2 px-5 py-2.5 dg-fg enabled:hover:-translate-y-0.5 dg-hover-fill-2`
+const btnGhost = `${btnBase} min-h-[40px] rounded-full px-3 py-1.5 text-xs dg-fg-2 dg-hover-fill dg-hover-fg`
 
 const inputCls =
-  'block w-full rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-base text-slate-50 shadow-inner shadow-black/20 transition placeholder:text-slate-400 focus:border-sky-300/60 focus:bg-slate-950/60 focus:outline-none focus:ring-4 focus:ring-sky-400/15 disabled:opacity-60 sm:text-[15px]'
+  'dg-input block w-full rounded-2xl px-4 py-3 text-base transition focus:outline-none disabled:opacity-60 sm:text-[15px]'
 
-const eyebrowCls = 'text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-200/80'
+const eyebrowCls = 'text-[11px] font-semibold uppercase tracking-[0.16em] dg-eyebrow'
 
 /* ============================================================
    UI primitives
@@ -489,7 +602,7 @@ function Spinner({ onLight = false }: { onLight?: boolean }) {
   return (
     <span
       aria-hidden="true"
-      className={`h-4 w-4 shrink-0 animate-spin rounded-full border-2 ${onLight ? 'border-slate-900/25 border-t-slate-900' : 'border-white/25 border-t-white'
+      className={`h-4 w-4 shrink-0 animate-spin rounded-full border-2 ${onLight ? 'dg-spinner-accent' : 'dg-spinner'
         }`}
     />
   )
@@ -501,7 +614,7 @@ function GratePlaceholder({ className = '', label = 'Photo unavailable' }: { cla
     <span
       role="img"
       aria-label={label}
-      className={`grid place-items-center bg-gradient-to-br from-slate-800/80 to-slate-900/80 text-sky-200/40 ${className}`}
+      className={`grid place-items-center dg-placeholder ${className}`}
     >
       <svg viewBox="0 0 64 64" fill="none" className="h-9 w-9" aria-hidden="true">
         <rect x="6" y="10" width="52" height="44" rx="9" stroke="currentColor" strokeWidth="2" />
@@ -540,26 +653,27 @@ function Photo(props: PhotoProps) {
 function Figure({ src, label, aspect = 'aspect-[4/3]' }: { src?: string | null; label: string; aspect?: string }) {
   return (
     <figure className="min-w-0">
-      <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-900/60">
+      <div className="overflow-hidden rounded-2xl border dg-bd dg-media-bg">
         <Photo src={src} alt={label} className={`${aspect} w-full`} />
       </div>
-      <figcaption className="mt-1.5 text-xs font-medium text-slate-300">{label}</figcaption>
+      <figcaption className="mt-1.5 text-xs font-medium dg-fg-2">{label}</figcaption>
     </figure>
   )
 }
 
+// Status tones come from CSS variables, so the same badge is soft glass at night and a vivid, high-contrast chip by day.
 const BADGE_TONES: Record<StatusKey, { wrap: string; divider: string; dot: string }> = {
-  pending: { wrap: 'border-amber-300/30 bg-amber-400/15 text-amber-100', divider: 'border-amber-300/25', dot: 'bg-amber-300' },
-  verified: { wrap: 'border-emerald-300/30 bg-emerald-400/15 text-emerald-100', divider: 'border-emerald-300/25', dot: 'bg-emerald-300' },
-  review: { wrap: 'border-orange-300/30 bg-orange-400/15 text-orange-100', divider: 'border-orange-300/25', dot: 'bg-orange-300' },
-  failed: { wrap: 'border-rose-300/30 bg-rose-400/15 text-rose-100', divider: 'border-rose-300/25', dot: 'bg-rose-300' },
+  pending: { wrap: 'dg-badge dg-badge--amber', divider: 'dg-badge-div--amber', dot: 'dg-dot-amber' },
+  verified: { wrap: 'dg-badge dg-badge--green', divider: 'dg-badge-div--green', dot: 'dg-dot-green' },
+  review: { wrap: 'dg-badge dg-badge--orange', divider: 'dg-badge-div--orange', dot: 'dg-dot-orange' },
+  failed: { wrap: 'dg-badge dg-badge--red', divider: 'dg-badge-div--red', dot: 'dg-dot-red' },
 }
 
 const METER_COLORS: Record<StatusKey, string> = {
-  pending: 'bg-amber-300',
-  verified: 'bg-emerald-300',
-  review: 'bg-orange-300',
-  failed: 'bg-rose-300',
+  pending: 'dg-meter--amber',
+  verified: 'dg-meter--green',
+  review: 'dg-meter--orange',
+  failed: 'dg-meter--red',
 }
 
 /** Micro-badge: status label, plus the AI confidence metric once a score exists. */
@@ -591,19 +705,19 @@ function ConfidenceBar({ pct, statusKey }: { pct: number; statusKey: StatusKey }
     <div>
       <div className="flex items-end justify-between gap-3">
         <div className="flex items-baseline gap-0.5">
-          <span className="text-5xl font-semibold tabular-nums tracking-tight text-white">{pct.toFixed(1)}</span>
-          <span className="text-xl font-medium text-slate-300">%</span>
+          <span className="text-5xl font-semibold tabular-nums tracking-tight dg-fg">{pct.toFixed(1)}</span>
+          <span className="text-xl font-medium dg-fg-2">%</span>
         </div>
-        <span className="pb-1.5 text-xs text-slate-300">AI confidence</span>
+        <span className="pb-1.5 text-xs dg-fg-2">AI confidence</span>
       </div>
-      <div className="relative mt-3 h-2 rounded-full bg-white/10">
+      <div className="relative mt-3 h-2 rounded-full dg-fill-3">
         <div
           className={`h-full rounded-full transition-[width] duration-1000 ease-out ${METER_COLORS[statusKey]}`}
           style={{ width: `${shown}%` }}
         />
-        <div className="absolute -top-1 h-4 w-px bg-white/50" style={{ left: `${PASS_THRESHOLD}%` }} />
+        <div className="absolute -top-1 h-4 w-px dg-marker" style={{ left: `${PASS_THRESHOLD}%` }} />
       </div>
-      <div className="relative mt-1.5 h-4 text-[11px] text-slate-400">
+      <div className="relative mt-1.5 h-4 text-[11px] dg-fg-3">
         <span className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: `${PASS_THRESHOLD}%` }}>
           {PASS_THRESHOLD}% pass
         </span>
@@ -614,11 +728,12 @@ function ConfidenceBar({ pct, statusKey }: { pct: number; statusKey: StatusKey }
 
 /** Orb with a soft halo. Floats gently so it never feels stuck to the page. */
 function OrbStage({ state, small = false }: { state: 'searching' | 'solving'; small?: boolean }) {
+  const theme = useContext(ThemeContext)
   return (
     <div className={`dg-orb-wrap ${small ? 'dg-orb-wrap--sm' : ''}`}>
       <span className="dg-orb-halo" aria-hidden="true" />
       <span className="dg-orb-ring" aria-hidden="true" />
-      <ThinkingOrb state={state} size={64} theme="dark" />
+      <ThinkingOrb state={state} size={64} theme={theme} />
     </div>
   )
 }
@@ -713,7 +828,7 @@ function Modal({
       <div
         aria-hidden="true"
         onClick={closable ? close : undefined}
-        className={`absolute inset-0 bg-slate-950/65 backdrop-blur-md ${leaving ? 'dg-fade-out' : 'dg-fade-in'}`}
+        className={`absolute inset-0 dg-scrim backdrop-blur-md ${leaving ? 'dg-fade-out' : 'dg-fade-in'}`}
       />
       <div
         ref={panelRef}
@@ -731,7 +846,7 @@ function Modal({
             data-modal-close=""
             aria-label="Close dialog"
             onClick={close}
-            className={`absolute right-3 top-3 z-10 grid h-10 w-10 place-items-center rounded-full bg-white/10 text-slate-200 transition hover:bg-white/20 hover:text-white active:scale-95 ${focusRing}`}
+            className={`absolute right-3 top-3 z-10 grid h-10 w-10 place-items-center rounded-full dg-fill-3 dg-fg-2 transition dg-hover-fill-2 dg-hover-fg active:scale-95 ${focusRing}`}
           >
             <X className="h-4 w-4" />
           </button>
@@ -771,25 +886,69 @@ function NavLink({
   )
 }
 
-function LogoMark({ }: { className?: string }) {
-  return (
-    <img
-      src="/logo.svg"
-      alt="DrainGRID"
-      className="h-14 w-14 object-contain"
-    />
+/** Animated Sun / Moon switch. `icon` is the round header button; `row` is the full-width drawer entry. */
+function ThemeToggle({
+  theme,
+  onToggle,
+  className = 'grid',
+  variant = 'icon',
+}: {
+  theme: Theme
+  onToggle: () => void
+  className?: string
+  variant?: 'icon' | 'row'
+}) {
+  const dark = theme === 'dark'
+  const label = dark ? 'Switch to light mode' : 'Switch to dark mode'
+  const iconMotion = 'absolute h-5 w-5 transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]'
+  const icons = (
+    <span className="relative grid h-5 w-5 shrink-0 place-items-center" aria-hidden="true">
+      <Sun className={`${iconMotion} dg-tone-amber ${dark ? 'rotate-90 scale-50 opacity-0' : 'rotate-0 scale-100 opacity-100'}`} />
+      <Moon className={`${iconMotion} dg-accent ${dark ? 'rotate-0 scale-100 opacity-100' : '-rotate-90 scale-50 opacity-0'}`} />
+    </span>
   )
+
+  if (variant === 'row') {
+    return (
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-label={label}
+        className={`dg-theme-toggle flex min-h-[52px] w-full items-center gap-3 rounded-2xl px-4 text-[15px] font-medium transition active:scale-[0.98] ${focusRing} ${className}`}
+      >
+        {icons}
+        <span className="flex-1 text-left">{dark ? 'Dark mode' : 'Light mode'}</span>
+        <span className="text-xs font-normal dg-fg-3">{dark ? 'Switch to light' : 'Switch to dark'}</span>
+      </button>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={label}
+      title={label}
+      className={`dg-theme-toggle h-11 w-11 shrink-0 place-items-center rounded-full transition active:scale-90 ${focusRing} ${className}`}
+    >
+      {icons}
+    </button>
+  )
+}
+
+function LogoMark({ className = 'h-14 w-14' }: { className?: string }) {
+  return <img src="/favicon.svg?v=logo26" alt="DrainGRID" className={`dg-logo ${className} object-contain`} />
 }
 
 function ContactLinks({ className = '' }: { className?: string }) {
   if (!hasContact) return null
-  const item = `inline-flex min-h-[44px] items-center gap-2.5 rounded-xl px-2 text-sm text-slate-200 transition hover:text-white ${focusRing}`
+  const item = `inline-flex min-h-[44px] items-center gap-2.5 rounded-xl px-2 text-sm dg-fg-2 transition dg-hover-fg ${focusRing}`
   return (
     <ul className={className}>
       {contactPhoneHref ? (
         <li>
           <a href={`tel:${contactPhoneHref}`} className={item}>
-            <Phone className="h-4 w-4 text-sky-300" aria-hidden="true" />
+            <Phone className="h-4 w-4 dg-accent" aria-hidden="true" />
             {CONTACT.phone.trim()}
           </a>
         </li>
@@ -797,7 +956,7 @@ function ContactLinks({ className = '' }: { className?: string }) {
       {contactEmail ? (
         <li>
           <a href={`mailto:${contactEmail}`} className={item}>
-            <Mail className="h-4 w-4 text-sky-300" aria-hidden="true" />
+            <Mail className="h-4 w-4 dg-accent" aria-hidden="true" />
             <span className="min-w-0 break-all">{contactEmail}</span>
           </a>
         </li>
@@ -853,13 +1012,13 @@ function Backdrop() {
 function DropIllustration() {
   return (
     <div className="dg-float-slow relative h-16 w-16">
-      <svg viewBox="0 0 64 64" fill="none" className="h-16 w-16 text-sky-200/40" aria-hidden="true">
+      <svg viewBox="0 0 64 64" fill="none" className="h-16 w-16 dg-accent-soft" aria-hidden="true">
         <rect x="4" y="6" width="56" height="48" rx="12" stroke="currentColor" strokeWidth="2" />
         {[17, 26, 35, 44].map((y) => (
           <rect key={y} x="14" y={y - 2} width="36" height="4" rx="2" fill="currentColor" />
         ))}
       </svg>
-      <span className="absolute -bottom-1.5 -right-1.5 grid h-7 w-7 place-items-center rounded-full border border-white/20 bg-slate-900 text-sky-200 shadow-[0_6px_16px_-4px_rgba(56,189,248,0.6)]">
+      <span className="absolute -bottom-1.5 -right-1.5 grid h-7 w-7 place-items-center rounded-full border dg-bd-3 dg-chip-solid dg-accent">
         <Camera className="h-3.5 w-3.5" aria-hidden="true" />
       </span>
     </div>
@@ -954,11 +1113,11 @@ function ImageDrop({
   const urlInvalid = urlText.trim() !== '' && !URL_RE.test(urlText.trim())
 
   const preview = (title: string, subtitle: string, actions?: ReactNode) => (
-    <div className="dg-fade-in flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.05] p-2.5">
-      <Photo src={value} alt="Photo preview" className="h-16 w-20 shrink-0 rounded-xl border border-white/10" />
+    <div className="dg-fade-in flex items-center gap-3 rounded-2xl border dg-bd dg-fill-2 p-2.5">
+      <Photo src={value} alt="Photo preview" className="h-16 w-20 shrink-0 rounded-xl border dg-bd" />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-white">{title}</p>
-        <p className="text-xs text-slate-300">{subtitle}</p>
+        <p className="truncate text-sm font-medium dg-fg">{title}</p>
+        <p className="text-xs dg-fg-2">{subtitle}</p>
       </div>
       {actions && <div className="flex shrink-0 flex-col gap-0.5 sm:flex-row sm:gap-1">{actions}</div>}
     </div>
@@ -1014,24 +1173,21 @@ function ImageDrop({
             onDragOver={onDragOver}
             onDragLeave={onDragLeave}
             onDrop={onDrop}
-            className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-9 text-center transition duration-300 ${focusRing} ${disabled ? 'pointer-events-none opacity-50' : ''
-              } ${dragging
-                ? 'scale-[1.01] border-cyan-300/80 bg-cyan-300/10'
-                : 'border-white/20 bg-white/[0.03] hover:border-sky-300/50 hover:bg-white/[0.06]'
-              }`}
+            className={`dg-drop flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-9 text-center transition duration-300 ${focusRing} ${disabled ? 'pointer-events-none opacity-50' : ''
+              } ${dragging ? 'dg-drop--active scale-[1.01]' : ''}`}
           >
             {processing ? (
               <>
                 <Spinner />
-                <p className="mt-3 text-sm text-slate-300">Processing photo…</p>
+                <p className="mt-3 text-sm dg-fg-2">Processing photo…</p>
               </>
             ) : (
               <>
                 <DropIllustration />
-                <p className="mt-4 text-sm text-slate-300">
-                  <span className="font-semibold text-white">Click to upload</span> or drag photo of {subject}
+                <p className="mt-4 text-sm dg-fg-2">
+                  <span className="font-semibold dg-fg">Click to upload</span> or drag photo of {subject}
                 </p>
-                <p className="mt-1 text-xs text-slate-400">JPG or PNG, up to 10 MB</p>
+                <p className="mt-1 text-xs dg-fg-3">JPG or PNG, up to 10 MB</p>
               </>
             )}
           </div>
@@ -1051,7 +1207,7 @@ function ImageDrop({
           />
           {value && preview(hostOf(value), 'Linked image')}
           {urlInvalid && (
-            <p role="alert" className="text-xs text-rose-300">
+            <p role="alert" className="text-xs dg-tone-red">
               Enter a full web address starting with http:// or https://
             </p>
           )}
@@ -1059,7 +1215,7 @@ function ImageDrop({
       )}
 
       {error && (
-        <p role="alert" className="mt-2 text-xs text-rose-300">
+        <p role="alert" className="mt-2 text-xs dg-tone-red">
           {error}
         </p>
       )}
@@ -1103,7 +1259,7 @@ function LocationCard({
   const accurate = accuracy != null && accuracy <= 50
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+    <div className="rounded-2xl border dg-bd dg-fill p-4">
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className={eyebrowCls}>Location</span>
         {status === 'locked' && !override && (
@@ -1128,7 +1284,7 @@ function LocationCard({
           {manualForced && (
             <div
               role="status"
-              className="flex items-start gap-2 rounded-xl border border-amber-300/25 bg-amber-400/10 px-3 py-2 text-xs text-amber-100"
+              className="flex items-start gap-2 rounded-xl dg-note dg-note--amber px-3 py-2 text-xs"
             >
               <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <p className="min-w-0 flex-1">
@@ -1158,14 +1314,14 @@ function LocationCard({
             disabled={disabled}
             aria-label="Location description"
           />
-          {coords && <p className="text-xs text-slate-400">GPS coordinates ({formatCoords(coords)}) will be attached.</p>}
+          {coords && <p className="text-xs dg-fg-3">GPS coordinates ({formatCoords(coords)}) will be attached.</p>}
         </div>
       ) : status === 'scanning' ? (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <OrbStage state="searching" small />
           <div className="min-w-0 flex-1" role="status">
-            <p className="text-sm font-medium text-white">Scanning for GPS signal</p>
-            <p className="text-xs text-slate-300">Locking your exact position…</p>
+            <p className="text-sm font-medium dg-fg">Scanning for GPS signal</p>
+            <p className="text-xs dg-fg-2">Locking your exact position…</p>
           </div>
           <button type="button" className={btnGhost} onClick={() => onOverride(true)}>
             Enter manually
@@ -1174,17 +1330,17 @@ function LocationCard({
       ) : (
         coords && (
           <div className="flex items-center gap-3">
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-gradient-to-b from-cyan-200 to-sky-400 text-slate-950 shadow-[0_8px_24px_-8px_rgba(56,189,248,0.9)]">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full dg-accent-bg dg-on-accent">
               <MapPin className="h-5 w-5" aria-hidden="true" />
             </span>
             <div className="min-w-0">
-              <p className="text-[15px] font-medium tabular-nums text-white">{formatCoords(coords)}</p>
+              <p className="text-[15px] font-medium tabular-nums dg-fg">{formatCoords(coords)}</p>
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/30 bg-emerald-400/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-100">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
+                <span className="dg-chip-green inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider">
+                  <span className="h-1.5 w-1.5 rounded-full bg-current" />
                   Auto-Locked
                 </span>
-                <span className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/[0.06] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-200">
+                <span className="inline-flex items-center gap-1 rounded-full border dg-bd-2 dg-fill-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider dg-fg-2">
                   <ShieldCheck className="h-3 w-3" aria-hidden="true" />
                   {accurate ? 'High accuracy' : 'Approximate'}
                   {accuracy != null && <span className="tabular-nums">· ±{Math.round(accuracy)} m</span>}
@@ -1213,6 +1369,7 @@ function CitizenView({
   const [image, setImage] = useState('')
   const [imageKey, setImageKey] = useState(0)
   const [submitting, setSubmitting] = useState(false)
+  const [visionStatus, setVisionStatus] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [created, setCreated] = useState<{ id?: string | number } | null>(null)
 
@@ -1236,12 +1393,16 @@ function CitizenView({
     setSubmitting(true)
     setSubmitError(null)
     try {
+      setVisionStatus('Analyzing drain photo with AI vision…')
+      const visualAnalysis = await runBrowserDrainVision(image)
+      setVisionStatus(null)
       const res = await api<Partial<Ticket>>('/api/tickets/new', {
         method: 'POST',
         body: JSON.stringify({
           location: locationString.slice(0, MAX_LOCATION),
           description: cleanText(note, true).slice(0, MAX_DESCRIPTION) || 'Clogged drain reported via Citizen Portal.',
           before_image_url: image,
+          ...(visualAnalysis != null ? { visual_analysis: visualAnalysis } : {}),
         }),
       })
       setCreated({ id: res?.id })
@@ -1262,44 +1423,44 @@ function CitizenView({
   return (
     <div className="mx-auto w-full max-w-xl">
       <div className="text-center">
-        <span className="dg-float glass-soft inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-sky-100">
-          <Sparkles className="h-3.5 w-3.5 text-cyan-300" aria-hidden="true" />
+        <span className="dg-float glass-soft inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium dg-fg">
+          <Sparkles className="h-3.5 w-3.5 dg-accent" aria-hidden="true" />
           No account needed
         </span>
-        <h1 className="mt-5 text-[2rem] font-semibold leading-[1.1] tracking-tight text-white sm:text-5xl">
+        <h1 className="mt-5 text-[2rem] font-semibold leading-[1.1] tracking-tight dg-fg sm:text-5xl">
           See a blocked drain?
           <br />
           <span className="dg-text-aqua">Report it in seconds.</span>
         </h1>
-        <p className="mx-auto mt-4 max-w-md text-base leading-relaxed text-slate-300 sm:text-[17px]">
+        <p className="mx-auto mt-4 max-w-md text-base leading-relaxed dg-fg-2 sm:text-[17px]">
           We lock your location automatically. Add a photo and our field team takes it from there.
         </p>
       </div>
 
       <div className="glass dg-rise relative mt-9 overflow-hidden rounded-3xl p-4 sm:mt-10 sm:p-6" style={{ animationDelay: '120ms' }}>
         {submitting && (
-          <div className="dg-fade-in absolute inset-0 z-10 grid place-items-center bg-slate-950/70 backdrop-blur-sm" role="status">
+          <div className="dg-fade-in absolute inset-0 z-10 grid place-items-center dg-overlay backdrop-blur-sm" role="status">
             <div className="flex flex-col items-center text-center">
               <OrbStage state="searching" />
-              <p className="mt-2 text-sm font-medium text-white">Submitting your report…</p>
-              <p className="mt-1 text-xs text-slate-300">Securing your location and photo</p>
+              <p className="mt-2 text-sm font-medium dg-fg">{visionStatus ?? 'Submitting your report…'}</p>
+              <p className="mt-1 text-xs dg-fg-2">Securing your location and photo</p>
             </div>
           </div>
         )}
 
         {created ? (
           <div className="dg-fade-in flex flex-col items-center py-8 text-center" role="status">
-            <span className="dg-pop dg-float grid h-16 w-16 place-items-center rounded-full bg-emerald-400/15 text-emerald-300 ring-8 ring-emerald-400/10">
+            <span className="dg-pop dg-float grid h-16 w-16 place-items-center rounded-full dg-circle-green">
               <CheckCircle2 className="h-8 w-8" aria-hidden="true" />
             </span>
-            <h2 className="mt-5 text-2xl font-semibold tracking-tight text-white">Report received</h2>
-            <p className="mt-1.5 max-w-xs text-sm text-slate-300">
+            <h2 className="mt-5 text-2xl font-semibold tracking-tight dg-fg">Report received</h2>
+            <p className="mt-1.5 max-w-xs text-sm dg-fg-2">
               Thank you. Your report is now in the field worker queue.
             </p>
             {created.id != null && (
-              <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/[0.06] px-3.5 py-1.5 text-sm">
-                <span className="text-slate-300">Reference</span>
-                <span className="font-semibold tabular-nums text-white">#{String(created.id)}</span>
+              <div className="mt-5 inline-flex items-center gap-2 rounded-full border dg-bd-2 dg-fill-2 px-3.5 py-1.5 text-sm">
+                <span className="dg-fg-2">Reference</span>
+                <span className="font-semibold tabular-nums dg-fg">#{String(created.id)}</span>
               </div>
             )}
             <button className={`${btnSecondary} mt-7`} onClick={() => setCreated(null)}>
@@ -1319,7 +1480,7 @@ function CitizenView({
 
             <div>
               <label htmlFor="note" className={`${eyebrowCls} mb-2 block`}>
-                Note <span className="font-normal normal-case tracking-normal text-slate-400">(optional)</span>
+                Note <span className="font-normal normal-case tracking-normal dg-fg-3">(optional)</span>
               </label>
               <textarea
                 id="note"
@@ -1347,7 +1508,7 @@ function CitizenView({
             {submitError && (
               <div
                 role="alert"
-                className="flex items-start gap-2 rounded-xl border border-rose-300/30 bg-rose-400/10 px-3 py-2.5 text-sm text-rose-100"
+                className="flex items-start gap-2 rounded-xl dg-note dg-note--red px-3 py-2.5 text-sm"
               >
                 <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                 <p className="min-w-0 flex-1">
@@ -1368,7 +1529,7 @@ function CitizenView({
                 </>
               )}
             </button>
-            <p className="text-center text-xs text-slate-400">
+            <p className="text-center text-xs dg-fg-3">
               {ready
                 ? 'Your location and photo will be shared with the field team.'
                 : `Add ${missing.join(' and ')} to continue.`}
@@ -1418,18 +1579,18 @@ function PasskeyModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: 
             if (!checking) submit(code)
           }}
         >
-          <span className="dg-float mx-auto grid h-14 w-14 place-items-center rounded-full bg-gradient-to-b from-cyan-200 to-sky-400 text-slate-950 shadow-[0_12px_34px_-10px_rgba(56,189,248,0.9)]">
+          <span className="dg-float mx-auto grid h-14 w-14 place-items-center rounded-full dg-accent-bg dg-on-accent">
             <Lock className="h-6 w-6" aria-hidden="true" />
           </span>
-          <h2 id="passkey-title" className="mt-5 text-xl font-semibold tracking-tight text-white">
+          <h2 id="passkey-title" className="mt-5 text-xl font-semibold tracking-tight dg-fg">
             Worker Terminal
           </h2>
-          <p className="mt-1.5 text-sm text-slate-300">
+          <p className="mt-1.5 text-sm dg-fg-2">
             Enter your 4-digit passkey to continue.
             {SHOW_DEMO_HINT && (
               <>
                 {' '}
-                <span className="text-slate-400">Dev build: any 4-digit code works.</span>
+                <span className="dg-fg-3">Dev build: any 4-digit code works.</span>
               </>
             )}
           </p>
@@ -1441,12 +1602,8 @@ function PasskeyModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: 
                 return (
                   <div
                     key={i}
-                    className={`grid h-14 w-12 place-items-center rounded-2xl border text-2xl font-semibold text-white transition duration-200 ${error
-                      ? 'border-rose-300/50 bg-rose-400/10'
-                      : active
-                        ? 'border-cyan-200/70 bg-white/10 ring-4 ring-cyan-300/10'
-                        : 'border-white/10 bg-white/[0.04]'
-                      }`}
+                    data-state={error ? 'error' : active ? 'active' : 'idle'}
+                    className="dg-digit grid h-14 w-12 place-items-center rounded-2xl border text-2xl font-semibold dg-fg transition duration-200"
                   >
                     {i < code.length ? '•' : ''}
                   </div>
@@ -1467,7 +1624,7 @@ function PasskeyModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: 
           </div>
 
           {error && (
-            <p role="alert" className="mt-3 text-xs text-rose-300">
+            <p role="alert" className="mt-3 text-xs dg-tone-red">
               {error}
             </p>
           )}
@@ -1553,19 +1710,19 @@ function VerifyModal({
           {phase === 'capture' && (
             <div className="p-5 sm:p-7">
               <p className={eyebrowCls}>AI audit · Ticket #{String(ticket.id)}</p>
-              <h2 id="verify-title" className="mt-1.5 pr-10 text-xl font-semibold tracking-tight text-white">
+              <h2 id="verify-title" className="mt-1.5 pr-10 text-xl font-semibold tracking-tight dg-fg">
                 {ticket.location}
               </h2>
 
-              <div className="mt-5 flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-2.5">
+              <div className="mt-5 flex items-center gap-3 rounded-2xl border dg-bd dg-fill p-2.5">
                 <Photo
                   src={ticket.before_image_url}
                   alt="Reported drain"
-                  className="h-14 w-[72px] shrink-0 rounded-xl border border-white/10"
+                  className="h-14 w-[72px] shrink-0 rounded-xl border dg-bd"
                 />
                 <div className="min-w-0">
-                  <p className="text-xs font-medium text-slate-300">Original report</p>
-                  <p className="line-clamp-2 text-sm text-slate-200">{ticket.description}</p>
+                  <p className="text-xs font-medium dg-fg-2">Original report</p>
+                  <p className="line-clamp-2 text-sm dg-fg-2">{ticket.description}</p>
                 </div>
               </div>
 
@@ -1577,7 +1734,7 @@ function VerifyModal({
               {error && (
                 <div
                   role="alert"
-                  className="mt-4 flex items-start gap-2 rounded-xl border border-rose-300/30 bg-rose-400/10 px-3 py-2.5 text-sm text-rose-100"
+                  className="mt-4 flex items-start gap-2 rounded-xl dg-note dg-note--red px-3 py-2.5 text-sm"
                 >
                   <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                   <p className="min-w-0 flex-1">
@@ -1611,19 +1768,19 @@ function VerifyModal({
               <div className="flex justify-center">
                 <OrbStage state="solving" />
               </div>
-              <p key={stepIdx} aria-live="polite" className="dg-fade-in mt-6 text-[15px] font-medium text-white">
+              <p key={stepIdx} aria-live="polite" className="dg-fade-in mt-6 text-[15px] font-medium dg-fg">
                 {ANALYSIS_STEPS[stepIdx]}
               </p>
-              <p className="mt-1.5 text-xs text-slate-300">Ticket #{String(ticket.id)} · This only takes a few seconds</p>
+              <p className="mt-1.5 text-xs dg-fg-2">Ticket #{String(ticket.id)} · This only takes a few seconds</p>
 
               <div className="mx-auto mt-7 flex max-w-xs items-center justify-center gap-3">
                 <Photo
                   src={ticket.before_image_url}
                   alt="Before"
-                  className="h-14 w-[72px] rounded-xl border border-white/10"
+                  className="h-14 w-[72px] rounded-xl border dg-bd"
                 />
-                <ArrowRight className="h-4 w-4 shrink-0 text-sky-200/50" aria-hidden="true" />
-                <Photo src={afterImage} alt="After" className="h-14 w-[72px] rounded-xl border border-white/10" />
+                <ArrowRight className="h-4 w-4 shrink-0 dg-accent-soft" aria-hidden="true" />
+                <Photo src={afterImage} alt="After" className="h-14 w-[72px] rounded-xl border dg-bd" />
               </div>
             </div>
           )}
@@ -1631,7 +1788,7 @@ function VerifyModal({
           {phase === 'result' && result && s && (
             <div className="dg-fade-in p-5 sm:p-7">
               <p className={eyebrowCls}>AI audit · Ticket #{String(result.id)}</p>
-              <h2 id="verify-title" className="mt-1.5 pr-10 text-xl font-semibold tracking-tight text-white">
+              <h2 id="verify-title" className="mt-1.5 pr-10 text-xl font-semibold tracking-tight dg-fg">
                 {result.location}
               </h2>
 
@@ -1640,16 +1797,16 @@ function VerifyModal({
                 <Figure src={result.after_image_url ?? afterImage} label="After" />
               </div>
 
-              <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-5" role="status">
+              <div className="mt-6 rounded-2xl border dg-bd dg-fill p-5" role="status">
                 <div className="mb-4 flex items-center gap-2">
                   <StatusBadge t={result} />
                 </div>
                 {s.pct != null ? (
                   <ConfidenceBar pct={s.pct} statusKey={s.key} />
                 ) : (
-                  <p className="text-sm text-slate-300">The server returned no confidence score.</p>
+                  <p className="text-sm dg-fg-2">The server returned no confidence score.</p>
                 )}
-                <p className="mt-3 text-sm text-slate-200">
+                <p className="mt-3 text-sm dg-fg-2">
                   {s.pct == null
                     ? 'Verification finished, but no score was returned.'
                     : s.key === 'verified'
@@ -1716,11 +1873,11 @@ function WorkerView({
   if (!authed) {
     return (
       <div className="mx-auto max-w-md text-center">
-        <span className="dg-float glass mx-auto grid h-16 w-16 place-items-center rounded-full text-sky-200">
+        <span className="dg-float glass mx-auto grid h-16 w-16 place-items-center rounded-full dg-accent">
           <Lock className="h-7 w-7" aria-hidden="true" />
         </span>
-        <h1 className="mt-5 text-3xl font-semibold tracking-tight text-white">Worker Terminal</h1>
-        <p className="mt-2 text-slate-300">Restricted to field workers. Enter your passkey to continue.</p>
+        <h1 className="mt-5 text-3xl font-semibold tracking-tight dg-fg">Worker Terminal</h1>
+        <p className="mt-2 dg-fg-2">Restricted to field workers. Enter your passkey to continue.</p>
         <PasskeyModal onSuccess={onUnlock} onClose={onCancelLogin} />
       </div>
     )
@@ -1730,12 +1887,12 @@ function WorkerView({
     <div className="mx-auto w-full max-w-3xl">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <span className="glass-soft inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-emerald-100">
-            <ShieldCheck className="h-3.5 w-3.5 text-emerald-300" aria-hidden="true" />
+          <span className="glass-soft inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium dg-fg">
+            <ShieldCheck className="h-3.5 w-3.5 dg-tone-green" aria-hidden="true" />
             Authenticated · Field worker
           </span>
-          <h1 className="mt-4 text-3xl font-semibold tracking-tight text-white sm:text-4xl">Active tickets</h1>
-          <p className="mt-2 text-slate-300">
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight dg-fg sm:text-4xl">Active tickets</h1>
+          <p className="mt-2 dg-fg-2">
             {origin
               ? `Sorted by distance from ${formatCoords(origin)}.`
               : 'Location unavailable. Showing tickets in the order they were submitted.'}
@@ -1762,16 +1919,16 @@ function WorkerView({
         {loading && tickets.length === 0 ? (
           <div className="space-y-3" role="status" aria-label="Loading tickets">
             {[0, 1, 2].map((i) => (
-              <div key={i} className="h-52 animate-pulse rounded-3xl bg-white/[0.06]" />
+              <div key={i} className="h-52 animate-pulse rounded-3xl dg-fill-2" />
             ))}
           </div>
         ) : rows.length === 0 ? (
           <div className="glass rounded-3xl px-6 py-16 text-center">
-            <span className="dg-float mx-auto grid h-12 w-12 place-items-center rounded-full bg-emerald-400/15 text-emerald-300">
+            <span className="dg-float mx-auto grid h-12 w-12 place-items-center rounded-full dg-circle-green">
               <CheckCircle2 className="h-6 w-6" aria-hidden="true" />
             </span>
-            <p className="mt-4 text-lg font-medium text-white">All clear</p>
-            <p className="mt-1 text-sm text-slate-300">No pending tickets right now.</p>
+            <p className="mt-4 text-lg font-medium dg-fg">All clear</p>
+            <p className="mt-1 text-sm dg-fg-2">No pending tickets right now.</p>
           </div>
         ) : (
           <ul className="space-y-4">
@@ -1785,20 +1942,20 @@ function WorkerView({
                   <Photo
                     src={t.before_image_url}
                     alt="Reported drain"
-                    className="h-20 w-20 shrink-0 rounded-2xl border border-white/10 sm:h-24 sm:w-24"
+                    className="h-20 w-20 shrink-0 rounded-2xl border dg-bd sm:h-24 sm:w-24"
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       {i === 0 && km != null && (
-                        <span className="rounded-full bg-gradient-to-b from-cyan-200 to-sky-400 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-950">
+                        <span className="rounded-full dg-accent-bg px-2 py-1 text-[10px] font-semibold uppercase tracking-wider dg-on-accent">
                           Nearest
                         </span>
                       )}
                       <StatusBadge t={t} />
                     </div>
-                    <p className="mt-2 break-words text-[15px] font-medium text-white">{t.location}</p>
-                    <p className="mt-0.5 line-clamp-2 text-sm text-slate-300">{t.description}</p>
-                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-300">
+                    <p className="mt-2 break-words text-[15px] font-medium dg-fg">{t.location}</p>
+                    <p className="mt-0.5 line-clamp-2 text-sm dg-fg-2">{t.description}</p>
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs dg-fg-2">
                       <span className="inline-flex items-center gap-1">
                         <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
                         {km != null ? `${formatDistance(km)} away` : 'Distance unknown'}
@@ -1841,26 +1998,26 @@ function BentoCard({ t, index, onOpen }: { t: Ticket; index: number; onOpen: () 
     <button
       onClick={onOpen}
       aria-label={`Open ticket ${String(t.id)}: ${t.location}`}
-      className={`dg-rise dg-lift group relative block overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 text-left shadow-[0_20px_50px_-24px_rgba(0,8,30,0.9)] ${focusRing} ${BENTO[index % BENTO.length]}`}
+      className={`dg-rise dg-lift group relative block overflow-hidden rounded-3xl border dg-bd dg-media-bg text-left dg-card-shadow ${focusRing} ${BENTO[index % BENTO.length]}`}
       style={{ animationDelay: `${Math.min(index, 8) * 70}ms` }}
     >
       {hasAfter ? (
-        <span className="absolute inset-0 grid grid-cols-2 gap-px bg-slate-950">
+        <span className="absolute inset-0 grid grid-cols-2 gap-px dg-media-sep">
           <Photo src={t.before_image_url} alt="Before" className="h-full w-full" />
           <Photo src={t.after_image_url} alt="After" className="h-full w-full" />
         </span>
       ) : (
         <Photo src={t.before_image_url} alt="Reported drain" className="absolute inset-0 h-full w-full" />
       )}
-      <span className="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-slate-950/10 to-slate-950/20" />
+      <span className="absolute inset-0 dg-photo-shade" />
 
       <span className="absolute left-3 top-3">
         <StatusBadge t={t} />
       </span>
 
-      <span className="absolute inset-x-3 bottom-3 block rounded-2xl border border-white/15 bg-slate-950/55 p-3 backdrop-blur-xl">
-        <span className="block truncate text-sm font-medium text-white">{t.location}</span>
-        <span className="mt-0.5 flex items-center justify-between gap-2 text-xs text-slate-300">
+      <span className="absolute inset-x-3 bottom-3 block rounded-2xl border dg-bd-2 dg-caption-bg p-3 backdrop-blur-xl">
+        <span className="block truncate text-sm font-medium dg-fg">{t.location}</span>
+        <span className="mt-0.5 flex items-center justify-between gap-2 text-xs dg-fg-2">
           <span className="min-w-0 truncate">{t.description}</span>
           <span className="shrink-0 tabular-nums">{formatDate(t.created_at) || `#${String(t.id)}`}</span>
         </span>
@@ -1876,14 +2033,14 @@ function TicketDetailModal({ t, onClose }: { t: Ticket; onClose: () => void }) {
       {() => (
         <div className="p-5 sm:p-7">
           <p className={eyebrowCls}>Ticket #{String(t.id)}</p>
-          <h2 id="ticket-title" className="mt-1.5 pr-10 text-xl font-semibold tracking-tight text-white">
+          <h2 id="ticket-title" className="mt-1.5 pr-10 text-xl font-semibold tracking-tight dg-fg">
             {t.location}
           </h2>
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <StatusBadge t={t} />
-            {formatDate(t.created_at) && <span className="text-xs text-slate-300">Reported {formatDate(t.created_at)}</span>}
+            {formatDate(t.created_at) && <span className="text-xs dg-fg-2">Reported {formatDate(t.created_at)}</span>}
           </div>
-          <p className="mt-4 whitespace-pre-line text-sm leading-relaxed text-slate-200">{t.description}</p>
+          <p className="mt-4 whitespace-pre-line text-sm leading-relaxed dg-fg-2">{t.description}</p>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <Figure src={t.before_image_url} label="Before: reported" />
@@ -1891,16 +2048,16 @@ function TicketDetailModal({ t, onClose }: { t: Ticket; onClose: () => void }) {
               <Figure src={t.after_image_url} label="After: repaired" />
             ) : (
               <figure>
-                <div className="grid aspect-[4/3] place-items-center rounded-2xl border border-dashed border-white/20 bg-white/[0.03] text-xs text-slate-300">
+                <div className="grid aspect-[4/3] place-items-center rounded-2xl border border-dashed dg-bd-3 dg-fill text-xs dg-fg-2">
                   Awaiting repair photo
                 </div>
-                <figcaption className="mt-1.5 text-xs font-medium text-slate-300">After: pending</figcaption>
+                <figcaption className="mt-1.5 text-xs font-medium dg-fg-2">After: pending</figcaption>
               </figure>
             )}
           </div>
 
           {s.pct != null && (
-            <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.04] p-5">
+            <div className="mt-6 rounded-2xl border dg-bd dg-fill p-5">
               <ConfidenceBar pct={s.pct} statusKey={s.key} />
             </div>
           )}
@@ -1950,12 +2107,12 @@ function LedgerView({
     <div className="mx-auto w-full max-w-6xl">
       <div className="flex flex-wrap items-end justify-between gap-5">
         <div className="min-w-0">
-          <span className="glass-soft inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-sky-100">
-            <ShieldCheck className="h-3.5 w-3.5 text-cyan-300" aria-hidden="true" />
+          <span className="glass-soft inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium dg-fg">
+            <ShieldCheck className="h-3.5 w-3.5 dg-accent" aria-hidden="true" />
             Public record
           </span>
-          <h1 className="mt-4 text-3xl font-semibold tracking-tight text-white sm:text-4xl">Audit Ledger</h1>
-          <p className="mt-2 max-w-lg text-slate-300">Every report, repair and AI verification, in one transparent log.</p>
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight dg-fg sm:text-4xl">Audit Ledger</h1>
+          <p className="mt-2 max-w-lg dg-fg-2">Every report, repair and AI verification, in one transparent log.</p>
         </div>
 
         <div className="flex w-full items-center gap-2 sm:w-auto">
@@ -1971,8 +2128,8 @@ function LedgerView({
                 aria-selected={filter === f.key}
                 onClick={() => setFilter(f.key)}
                 className={`min-h-[40px] rounded-full px-3.5 py-1.5 text-sm font-medium transition duration-300 ${focusRing} ${filter === f.key
-                  ? 'bg-gradient-to-b from-cyan-200 to-sky-400 text-slate-950 shadow-[0_6px_18px_-6px_rgba(56,189,248,0.8)]'
-                  : 'text-slate-300 hover:text-white'
+                  ? 'dg-accent-bg dg-on-accent'
+                  : 'dg-fg-2 dg-hover-fg'
                   }`}
               >
                 {f.label}
@@ -1997,8 +2154,8 @@ function LedgerView({
             className="dg-float glass rounded-2xl px-4 py-4 sm:px-5"
             style={{ animationDelay: `-${i * 1.7}s`, animationDuration: `${8 + i}s` }}
           >
-            <dt className="text-xs font-medium text-slate-300">{s.label}</dt>
-            <dd className="mt-1 text-2xl font-semibold tabular-nums tracking-tight text-white">{s.value}</dd>
+            <dt className="text-xs font-medium dg-fg-2">{s.label}</dt>
+            <dd className="mt-1 text-2xl font-semibold tabular-nums tracking-tight dg-fg">{s.value}</dd>
           </div>
         ))}
       </dl>
@@ -2011,13 +2168,13 @@ function LedgerView({
             aria-label="Loading ledger"
           >
             {BENTO.map((span, i) => (
-              <div key={i} className={`animate-pulse rounded-3xl bg-white/[0.06] ${span}`} />
+              <div key={i} className={`animate-pulse rounded-3xl dg-fill-2 ${span}`} />
             ))}
           </div>
         ) : shown.length === 0 ? (
           <div className="glass rounded-3xl px-6 py-16 text-center">
-            <p className="text-lg font-medium text-white">No records to show</p>
-            <p className="mt-1 text-sm text-slate-300">
+            <p className="text-lg font-medium dg-fg">No records to show</p>
+            <p className="mt-1 text-sm dg-fg-2">
               {tickets.length === 0 ? 'Submit the first report from the Citizen Portal.' : 'No tickets match this filter.'}
             </p>
           </div>
@@ -2043,8 +2200,8 @@ function NotFoundView({ go }: { go: Go }) {
     <div className="mx-auto w-full max-w-lg text-center">
       <div className="glass dg-float rounded-3xl px-6 py-12 sm:px-10">
         <p className="dg-text-aqua text-7xl font-bold tracking-tighter sm:text-8xl">404</p>
-        <h1 className="mt-4 text-2xl font-semibold tracking-tight text-white">Page not found</h1>
-        <p className="mx-auto mt-2 max-w-sm text-slate-300">
+        <h1 className="mt-4 text-2xl font-semibold tracking-tight dg-fg">Page not found</h1>
+        <p className="mx-auto mt-2 max-w-sm dg-fg-2">
           This page doesn’t exist, or the drain it pointed to has been rerouted.
         </p>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
@@ -2056,7 +2213,7 @@ function NotFoundView({ go }: { go: Go }) {
             <MapPin className="h-4 w-4" aria-hidden="true" />
             Report a drain
           </NavLink>
-          <NavLink to="/ledger" go={go} className={`${btnSecondary} hover:-translate-y-0.5 hover:bg-white/10`}>
+          <NavLink to="/ledger" go={go} className={`${btnSecondary} hover:-translate-y-0.5 dg-hover-fill`}>
             <ShieldCheck className="h-4 w-4" aria-hidden="true" />
             View the ledger
           </NavLink>
@@ -2075,7 +2232,19 @@ const TABS: { key: ViewKey; to: string; label: string; Icon: IconType }[] = [
   { key: 'ledger', to: PATHS.ledger, label: 'Ledger', Icon: ShieldCheck },
 ]
 
-function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolean; go: Go }) {
+function SiteHeader({
+  view,
+  authed,
+  go,
+  theme,
+  onToggleTheme,
+}: {
+  view: ViewKey | null
+  authed: boolean
+  go: Go
+  theme: Theme
+  onToggleTheme: () => void
+}) {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuBtnRef = useRef<HTMLButtonElement>(null)
   const firstLinkRef = useRef<HTMLDivElement>(null)
@@ -2110,7 +2279,7 @@ function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolea
         <div
           aria-hidden="true"
           onClick={() => setMenuOpen(false)}
-          className="dg-fade-in fixed inset-0 z-30 bg-slate-950/60 backdrop-blur-sm md:hidden"
+          className="dg-fade-in fixed inset-0 z-30 dg-scrim backdrop-blur-sm md:hidden"
         />
       )}
 
@@ -2125,8 +2294,8 @@ function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolea
             >
               <LogoMark />
               <span className="flex items-baseline gap-1.5">
-                <span className="text-[15px] font-semibold tracking-tight text-white">DrainGRID</span>
-                <span className="rounded border border-sky-300/40 px-1 py-px text-[10px] font-semibold tracking-wide text-sky-200">
+                <span className="text-[15px] font-semibold tracking-tight dg-fg">DrainGRID</span>
+                <span className="rounded border dg-bd-3 px-1 py-px text-[10px] font-semibold tracking-wide dg-accent">
                   AI
                 </span>
               </span>
@@ -2135,11 +2304,11 @@ function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolea
             {/* Desktop: floating pill with a sliding indicator */}
             <nav
               aria-label="Primary"
-              className="relative hidden w-[26rem] shrink-0 grid-cols-3 rounded-full border border-white/10 bg-white/[0.04] p-1 md:grid"
+              className="relative hidden w-[26rem] shrink-0 grid-cols-3 rounded-full border dg-bd dg-fill p-1 md:grid"
             >
               <span
                 aria-hidden="true"
-                className={`pointer-events-none absolute inset-y-1 left-1 rounded-full bg-gradient-to-b from-cyan-200 to-sky-400 shadow-[0_8px_24px_-8px_rgba(56,189,248,0.8)] transition-[transform,opacity] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${view ? 'opacity-100' : 'opacity-0'
+                className={`pointer-events-none absolute inset-y-1 left-1 rounded-full dg-accent-bg transition-[transform,opacity] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${view ? 'opacity-100' : 'opacity-0'
                   }`}
                 style={{
                   width: 'calc((100% - 0.5rem) / 3)',
@@ -2154,7 +2323,7 @@ function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolea
                     to={to}
                     go={go}
                     current={active}
-                    className={`relative z-10 flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[13px] font-medium transition-colors duration-300 active:scale-[0.97] ${focusRing} ${active ? 'text-slate-950' : 'text-slate-300 hover:text-white'
+                    className={`relative z-10 flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[13px] font-medium transition-colors duration-300 active:scale-[0.97] ${focusRing} ${active ? 'dg-on-accent' : 'dg-fg-2 dg-hover-fg'
                       }`}
                   >
                     {label}
@@ -2162,7 +2331,7 @@ function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolea
                       <span className="relative">
                         <Icon className="h-3 w-3 opacity-80" aria-hidden="true" />
                         {authed && (
-                          <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-emerald-400 ring-1 ring-slate-950/40" />
+                          <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-emerald-400 ring-2 ring-[color:var(--dg-page)]" />
                         )}
                       </span>
                     )}
@@ -2170,6 +2339,9 @@ function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolea
                 )
               })}
             </nav>
+
+            {/* Desktop: theme switch (the mobile drawer has its own) */}
+            <ThemeToggle theme={theme} onToggle={onToggleTheme} className="hidden md:grid" />
 
             {/* Mobile: menu button */}
             <button
@@ -2179,7 +2351,7 @@ function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolea
               aria-expanded={menuOpen}
               aria-controls="mobile-menu"
               onClick={() => setMenuOpen((o) => !o)}
-              className={`grid h-11 w-11 shrink-0 place-items-center rounded-full border border-white/15 bg-white/[0.07] text-white transition active:scale-95 md:hidden ${focusRing}`}
+              className={`grid h-11 w-11 shrink-0 place-items-center rounded-full border dg-bd-2 dg-fill-2 dg-fg transition active:scale-95 md:hidden ${focusRing}`}
             >
               {menuOpen ? <X className="h-5 w-5" aria-hidden="true" /> : <Menu className="h-5 w-5" aria-hidden="true" />}
             </button>
@@ -2203,8 +2375,8 @@ function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolea
                           current={active}
                           onNavigate={() => setMenuOpen(false)}
                           className={`flex min-h-[52px] items-center gap-3 rounded-2xl px-4 text-[15px] font-medium transition ${focusRing} ${active
-                            ? 'bg-gradient-to-b from-cyan-200 to-sky-400 text-slate-950'
-                            : 'text-slate-100 hover:bg-white/10'
+                            ? 'dg-accent-bg dg-on-accent'
+                            : 'dg-fg dg-hover-fill'
                             }`}
                         >
                           <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
@@ -2219,8 +2391,11 @@ function SiteHeader({ view, authed, go }: { view: ViewKey | null; authed: boolea
                   })}
                 </ul>
               </nav>
+              <div className="mt-2 border-t dg-bd pt-2">
+                <ThemeToggle theme={theme} onToggle={onToggleTheme} variant="row" />
+              </div>
               {hasContact && (
-                <div className="mt-2 border-t border-white/10 px-2 pt-2">
+                <div className="mt-2 border-t dg-bd px-2 pt-2">
                   <ContactLinks />
                 </div>
               )}
@@ -2239,9 +2414,9 @@ function SiteFooter({ view, go }: { view: ViewKey | null; go: Go }) {
         <div>
           <NavLink to="/" go={go} className={`inline-flex min-h-[44px] items-center gap-2.5 rounded-xl ${focusRing}`}>
             <LogoMark className="h-8 w-8" />
-            <span className="text-[15px] font-semibold tracking-tight text-white">DrainGRID</span>
+            <span className="text-[15px] font-semibold tracking-tight dg-fg">DrainGRID</span>
           </NavLink>
-          <p className="mt-2 max-w-xs text-sm text-slate-300">
+          <p className="mt-2 max-w-xs text-sm dg-fg-2">
             Citizen-powered drainage reporting, verified by AI and published in an open ledger.
           </p>
         </div>
@@ -2255,7 +2430,7 @@ function SiteFooter({ view, go }: { view: ViewKey | null; go: Go }) {
                   to={to}
                   go={go}
                   current={view === key}
-                  className={`inline-flex min-h-[44px] items-center rounded-xl text-sm transition hover:text-white ${focusRing} ${view === key ? 'font-medium text-white' : 'text-slate-300'
+                  className={`inline-flex min-h-[44px] items-center rounded-xl text-sm transition dg-hover-fg ${focusRing} ${view === key ? 'font-medium dg-fg' : 'dg-fg-2'
                     }`}
                 >
                   {label}
@@ -2268,12 +2443,12 @@ function SiteFooter({ view, go }: { view: ViewKey | null; go: Go }) {
         <div>
           <h2 className={eyebrowCls}>{hasContact ? 'Contact' : 'Safety'}</h2>
           {hasContact && <ContactLinks className="mt-2" />}
-          <p className="mt-3 text-sm text-slate-300">
+          <p className="mt-3 text-sm dg-fg-2">
             For urgent flooding or a safety hazard, call your local emergency services instead of using this form.
           </p>
         </div>
       </div>
-      <p className="mx-auto mt-6 max-w-6xl text-center text-xs text-slate-400">
+      <p className="mx-auto mt-6 max-w-6xl text-center text-xs dg-fg-3">
         © {new Date().getFullYear()} DrainGRID AI
       </p>
     </footer>
@@ -2308,7 +2483,7 @@ function ConcentricRectangle({
     >
       <div
         style={{ borderRadius: `${innerRadius}px` }}
-        className={`border border-white/15 bg-slate-950/40 ${innerClassName}`}
+        className={`border dg-bd-2 dg-inner ${innerClassName}`}
       >
         {children}
       </div>
@@ -2357,14 +2532,14 @@ function InteractiveWorkerSection(props: any) {
         <ConcentricRectangle outerRadius={26} padding={8} innerClassName="p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="flex items-center gap-2 text-xs font-semibold text-cyan-300">
+              <div className="flex items-center gap-2 text-xs font-semibold dg-accent">
                 <Sparkles className="h-3.5 w-3.5" />
                 <span>AI Clog Intensity & Bengaluru Zone Triage</span>
-                <span className="rounded-full bg-emerald-400/15 px-2 py-0.5 text-[11px] text-emerald-300 border border-emerald-400/30">
+                <span className="dg-chip-green rounded-full px-2 py-0.5 text-[11px]">
                   Gatekeeper & Anti-Breach Active
                 </span>
               </div>
-              <p className="mt-1 text-xs text-slate-300">
+              <p className="mt-1 text-xs dg-fg-2">
                 Click any Alert Level or Bengaluru Area below to filter the live verification queue.
               </p>
             </div>
@@ -2373,52 +2548,48 @@ function InteractiveWorkerSection(props: any) {
               <button
                 type="button"
                 onClick={() => setAlertFilter('ALL')}
-                className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition ${alertFilter === 'ALL'
-                  ? 'bg-cyan-400 text-slate-950 shadow'
-                  : 'bg-white/10 text-slate-200 hover:bg-white/20'
-                  }`}
+                data-active={alertFilter === 'ALL'}
+                aria-pressed={alertFilter === 'ALL'}
+                className="dg-alert dg-alert--all rounded-xl px-3 py-1.5 text-xs font-semibold"
               >
                 All ({enrichedTickets.length})
               </button>
               <button
                 type="button"
                 onClick={() => setAlertFilter('RED')}
-                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold border transition ${alertFilter === 'RED'
-                  ? 'bg-rose-500 text-white border-rose-300 shadow-lg'
-                  : 'bg-rose-500/15 text-rose-200 border-rose-400/35 hover:bg-rose-500/25'
-                  }`}
+                data-active={alertFilter === 'RED'}
+                aria-pressed={alertFilter === 'RED'}
+                className="dg-alert dg-alert--red flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold"
               >
-                <span className="h-2 w-2 rounded-full bg-rose-300 animate-ping" />
+                <span className="h-2 w-2 rounded-full bg-current animate-ping" />
                 RED ≥75% ({counts.RED})
               </button>
               <button
                 type="button"
                 onClick={() => setAlertFilter('AMBER')}
-                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold border transition ${alertFilter === 'AMBER'
-                  ? 'bg-amber-400 text-slate-950 border-amber-200 shadow-lg'
-                  : 'bg-amber-500/15 text-amber-200 border-amber-400/35 hover:bg-amber-500/25'
-                  }`}
+                data-active={alertFilter === 'AMBER'}
+                aria-pressed={alertFilter === 'AMBER'}
+                className="dg-alert dg-alert--amber flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold"
               >
-                <span className="h-2 w-2 rounded-full bg-amber-300" />
+                <span className="h-2 w-2 rounded-full bg-current" />
                 AMBER 40–74% ({counts.AMBER})
               </button>
               <button
                 type="button"
                 onClick={() => setAlertFilter('GREEN')}
-                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold border transition ${alertFilter === 'GREEN'
-                  ? 'bg-emerald-400 text-slate-950 border-emerald-200 shadow-lg'
-                  : 'bg-emerald-500/15 text-emerald-200 border-emerald-400/35 hover:bg-emerald-500/25'
-                  }`}
+                data-active={alertFilter === 'GREEN'}
+                aria-pressed={alertFilter === 'GREEN'}
+                className="dg-alert dg-alert--green flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold"
               >
-                <span className="h-2 w-2 rounded-full bg-emerald-300" />
+                <span className="h-2 w-2 rounded-full bg-current" />
                 GREEN &lt;40% / Clear ({counts.GREEN})
               </button>
             </div>
           </div>
 
           {areas.length > 1 && (
-            <div className="mt-3 flex items-center gap-2 overflow-x-auto pt-2 border-t border-white/10">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 shrink-0">
+            <div className="mt-3 flex items-center gap-2 overflow-x-auto pt-2 border-t dg-bd">
+              <span className="text-[11px] font-semibold uppercase tracking-wider dg-fg-3 shrink-0">
                 Bengaluru Area:
               </span>
               {areas.map((a) => (
@@ -2426,10 +2597,9 @@ function InteractiveWorkerSection(props: any) {
                   key={a}
                   type="button"
                   onClick={() => setAreaFilter(a)}
-                  className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium border transition ${areaFilter === a
-                    ? 'bg-white text-slate-950 border-white font-semibold'
-                    : 'bg-white/5 text-slate-200 border-white/15 hover:bg-white/15'
-                    }`}
+                  data-active={areaFilter === a}
+                  aria-pressed={areaFilter === a}
+                  className="dg-area-chip shrink-0 rounded-full px-3 py-1 text-xs font-medium"
                 >
                   {a === 'ALL' ? 'All BLR Areas' : a}
                 </button>
@@ -2447,6 +2617,7 @@ function InteractiveWorkerSection(props: any) {
 export default function App() {
   const { path, go } = usePath()
   const view = viewForPath(path)
+  const { theme, toggleTheme } = useTheme()
 
   const [authed, setAuthed] = useState<boolean>(() => {
     try {
@@ -2498,22 +2669,23 @@ export default function App() {
   }
 
   return (
-    <div className="relative min-h-[100dvh] overflow-x-clip text-slate-100">
+    <ThemeContext.Provider value={theme}>
+    <div className="relative min-h-[100dvh] overflow-x-clip dg-fg">
       <a
         href="#main"
-        className="sr-only z-[70] rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-950 focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
+        className="dg-skip sr-only z-[70] rounded-full px-4 py-2 text-sm font-semibold focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
       >
         Skip to content
       </a>
 
       <Backdrop />
-      <SiteHeader view={view} authed={authed} go={go} />
+      <SiteHeader view={view} authed={authed} go={go} theme={theme} onToggleTheme={toggleTheme} />
 
       <div className="relative z-10 px-4 pb-6 pt-[6.5rem] sm:px-6 sm:pt-32">
         {error && (view === 'worker' || view === 'ledger') && (
           <div
             role="alert"
-            className="mx-auto mb-6 flex max-w-3xl items-start gap-3 rounded-2xl border border-rose-300/30 bg-rose-400/10 p-3.5 text-sm text-rose-100 backdrop-blur-xl"
+            className="mx-auto mb-6 flex max-w-3xl items-start gap-3 rounded-2xl dg-note dg-note--red p-3.5 text-sm backdrop-blur-xl"
           >
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             <p className="min-w-0 flex-1">{error}</p>
@@ -2556,17 +2728,18 @@ export default function App() {
         {toast && (
           <div
             key={toast.id}
-            className="glass-strong dg-toast-in pointer-events-auto flex max-w-md items-center gap-2.5 rounded-full px-4 py-2.5 text-sm text-slate-100"
+            className="glass-strong dg-toast-in pointer-events-auto flex max-w-md items-center gap-2.5 rounded-full px-4 py-2.5 text-sm dg-fg"
           >
             {toast.tone === 'success' ? (
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-300" aria-hidden="true" />
+              <CheckCircle2 className="h-4 w-4 shrink-0 dg-tone-green" aria-hidden="true" />
             ) : (
-              <TriangleAlert className="h-4 w-4 shrink-0 text-rose-300" aria-hidden="true" />
+              <TriangleAlert className="h-4 w-4 shrink-0 dg-tone-red" aria-hidden="true" />
             )}
             <span className="min-w-0">{toast.message}</span>
           </div>
         )}
       </div>
     </div>
+    </ThemeContext.Provider>
   )
 }
