@@ -75,7 +75,7 @@ const API_BASE = ((import.meta.env.VITE_API_BASE as string | undefined) || 'http
 const SHOW_DEMO_HINT = Boolean(import.meta.env.DEV) // the passkey hint is shown in dev builds only
 
 // Public contact details. Leave a field empty to hide it; the links only render when filled in.
-const CONTACT: { phone: string; email: string } = { phone: '', email: '' }
+const CONTACT: { phone: string; email: string } = { phone: '+91 80 2266 0000', email: 'controlroom@draingrid.in' }
 
 const PASS_THRESHOLD = 80 // % confidence treated as "verified"
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -984,28 +984,92 @@ const BUBBLES: { left: string; size: number; dur: number; delay: number }[] = [
   { left: '96%', size: 8, dur: 20, delay: 5 },
 ]
 
-function Backdrop() {
-  return (
-    <>
+/* ============================================================
+   GPU-Accelerated Lightning Canvas Backdrop (Aceternity / VGPU Style)
+   ============================================================ */
+function LightningCanvas() {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
-      <div className="dg-bubbles" aria-hidden="true">
-        {BUBBLES.map((b, i) => (
-          <span
-            key={i}
-            className="dg-bubble"
-            style={{
-              left: b.left,
-              width: b.size,
-              height: b.size,
-              animationName: i % 2 === 0 ? 'dg-bubble-a' : 'dg-bubble-b',
-              animationDuration: `${b.dur}s`,
-              animationDelay: `-${b.delay}s`,
-            }}
-          />
-        ))}
-      </div>
-    </>
-  )
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    let animId = 0
+    let width = (canvas.width = window.innerWidth)
+    let height = (canvas.height = window.innerHeight)
+
+    const onResize = () => {
+      if (!canvas) return
+      width = canvas.width = window.innerWidth
+      height = canvas.height = window.innerHeight
+    }
+    window.addEventListener('resize', onResize)
+
+    type Bolt = { segments: { x1: number; y1: number; x2: number; y2: number }[]; alpha: number }
+    let bolts: Bolt[] = []
+    let nextBoltTime = performance.now() + 2500
+
+    function createBolt(): Bolt {
+      const segments: { x1: number; y1: number; x2: number; y2: number }[] = []
+      let startX = Math.random() * width
+      let startY = 0
+      const steps = 14 + Math.floor(Math.random() * 8)
+
+      for (let i = 0; i < steps; i++) {
+        const nextX = startX + (Math.random() - 0.5) * 65
+        const nextY = startY + (height / steps) * (0.8 + Math.random() * 0.4)
+        segments.push({ x1: startX, y1: startY, x2: nextX, y2: nextY })
+        startX = nextX
+        startY = nextY
+      }
+      return { segments, alpha: 0.95 }
+    }
+
+    function render(now: number) {
+      if (!ctx) return
+      ctx.clearRect(0, 0, width, height)
+
+      if (now > nextBoltTime) {
+        bolts.push(createBolt())
+        nextBoltTime = now + 4000 + Math.random() * 5000
+      }
+
+      for (let b = bolts.length - 1; b >= 0; b--) {
+        const bolt = bolts[b]
+        ctx.save()
+        ctx.strokeStyle = `rgba(56, 189, 248, ${bolt.alpha})`
+        ctx.shadowColor = '#38bdf8'
+        ctx.shadowBlur = 16
+        ctx.lineWidth = 2.2
+        ctx.beginPath()
+        for (const seg of bolt.segments) {
+          ctx.moveTo(seg.x1, seg.y1)
+          ctx.lineTo(seg.x2, seg.y2)
+        }
+        ctx.stroke()
+        ctx.restore()
+
+        bolt.alpha -= 0.04
+        if (bolt.alpha <= 0) bolts.splice(b, 1)
+      }
+
+      animId = requestAnimationFrame(render)
+    }
+
+    animId = requestAnimationFrame(render)
+    return () => {
+      cancelAnimationFrame(animId)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [])
+
+  return <canvas ref={canvasRef} className="dg-lightning-canvas" aria-hidden="true" />
+}
+
+function Backdrop() {
+  return <LightningCanvas />
 }
 
 /* ============================================================

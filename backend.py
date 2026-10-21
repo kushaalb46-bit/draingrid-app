@@ -15,6 +15,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+ALLOWED_MAGIC_HEADERS = [
+    b"ÿØÿ",             # JPEG
+    b"PNG
+
+",        # PNG
+    b"RIFF",                     # WebP container
+]
+
+
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="DrainGRID Bengaluru AI API")
 app.state.limiter = limiter

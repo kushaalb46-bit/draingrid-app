@@ -1,4 +1,8 @@
-import { pipeline } from '@huggingface/transformers';
+import { pipeline } from '@huggingface/transformers'
+import { env as hfEnv } from '@huggingface/transformers'
+if (hfEnv?.backends?.onnx?.wasm) {
+  hfEnv.backends.onnx.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/'
+};
 
 const CONDITIONS = [
   { label: 'a clear storm drain with no visible blockage', intensity: 10 },
