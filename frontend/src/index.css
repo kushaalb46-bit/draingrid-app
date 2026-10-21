@@ -734,3 +734,31 @@ html.dg-theme-switching *::after {
   animation: none !important;
   min-height: calc(100dvh - 200px);
 }
+/* === Aceternity / ReactBits Mouse-Tracking Radial Spotlight === */
+.dg-spotlight-card {
+  position: relative;
+}
+.dg-spotlight-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  background: radial-gradient(
+    480px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    rgba(56, 189, 248, 0.14),
+    transparent 45%
+  );
+}
+html.light .dg-spotlight-card::before {
+  background: radial-gradient(
+    480px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    rgba(2, 132, 199, 0.10),
+    transparent 45%
+  );
+}
+.dg-spotlight-card:hover::before {
+  opacity: 1;
+}

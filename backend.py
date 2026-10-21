@@ -4,6 +4,9 @@ import uuid
 import base64
 import sqlite3
 import hashlib
+import hmac
+import time
+from pathlib import Path
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request, Depends, Body
@@ -14,6 +17,28 @@ from slowapi.errors import RateLimitExceeded
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# App-Lockdown 01 & 02: Non-executable private storage outside webroot + Webhook secret
+PRIVATE_UPLOAD_VAULT = Path("./private_uploads_vault")
+PRIVATE_UPLOAD_VAULT.mkdir(parents=True, exist_ok=True)
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB strict cap
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+WEBHOOK_TOLERANCE_SECONDS = 300  # 5-minute replay protection window
+
+def verify_webhook_hmac(raw_body: bytes, signature_header: str, timestamp_header: str) -> None:
+    if not WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Webhook secret not configured on server.")
+    try:
+        ts = int(timestamp_header)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid webhook timestamp header.")
+    if abs(int(time.time()) - ts) > WEBHOOK_TOLERANCE_SECONDS:
+        raise HTTPException(status_code=401, detail="Webhook event expired (replay protection triggered).")
+    signed_payload = f"{ts}.".encode("utf-8") + raw_body
+    expected_sig = hmac.new(WEBHOOK_SECRET.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected_sig, signature_header or ""):
+        raise HTTPException(status_code=401, detail="Invalid webhook HMAC signature.")
+
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 ALLOWED_MAGIC_HEADERS = [

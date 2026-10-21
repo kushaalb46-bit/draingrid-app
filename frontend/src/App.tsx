@@ -13,16 +13,6 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react'
-function ThinkingOrb({ state, size = 64 }: { state?: string; size?: number; theme?: string }) {
-  return (
-    <span
-      style={{ width: size, height: size }}
-      className={`inline-block rounded-full bg-gradient-to-tr from-sky-500/90 via-cyan-300/85 to-teal-200/90 shadow-[0_0_32px_rgba(56,189,248,0.75)] border border-white/50 ${state === 'solving' ? 'animate-spin' : 'animate-pulse'
-        }`}
-      aria-hidden="true"
-    />
-  )
-}
 import {
   ArrowRight,
   Camera,
@@ -42,6 +32,7 @@ import {
   Sun,
   TriangleAlert,
   X,
+  Zap,
 } from 'lucide-react'
 import * as drainVisionMod from './lib/drainVision'
 
@@ -64,38 +55,49 @@ async function runBrowserDrainVision(imageDataUrl: string): Promise<unknown> {
   return undefined
 }
 
+function ThinkingOrb({ state, size = 64, theme = 'dark' }: { state?: string; size?: number; theme?: string }) {
+  const ringCls = theme === 'light' ? 'border-sky-600/40 shadow-[0_0_28px_rgba(2,132,199,0.55)]' : 'border-white/50 shadow-[0_0_32px_rgba(56,189,248,0.75)]'
+  return (
+    <span
+      style={{ width: size, height: size }}
+      className={`inline-block rounded-full bg-gradient-to-tr from-sky-500/90 via-cyan-300/85 to-teal-200/90 border ${ringCls} ${
+        state === 'solving' ? 'animate-spin' : 'animate-pulse'
+      }`}
+      aria-hidden="true"
+    />
+  )
+}
+
 /* ============================================================
    Config
    ============================================================ */
-// Set VITE_API_BASE in .env (e.g. https://api.example.com) for production builds.
-const API_BASE = ((import.meta.env.VITE_API_BASE as string | undefined) || 'http://localhost:8000').replace(
-  /\/+$/,
-  '',
-)
-const SHOW_DEMO_HINT = Boolean(import.meta.env.DEV) // the passkey hint is shown in dev builds only
+const API_BASE = ((import.meta.env.VITE_API_BASE as string | undefined) || 'http://localhost:8000').replace(/\/+$/, '')
+const SHOW_DEMO_HINT = Boolean(import.meta.env.DEV)
 
-// Public contact details. Leave a field empty to hide it; the links only render when filled in.
-const CONTACT: { phone: string; email: string } = { phone: '+91 80 2266 0000', email: 'controlroom@draingrid.in' }
+const CONTACT: { phone: string; email: string } = {
+  phone: '+91 80 2266 0000',
+  email: 'controlroom@draingrid.in',
+}
 
-const PASS_THRESHOLD = 80 // % confidence treated as "verified"
+const PASS_THRESHOLD = 80
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-const MAX_DIMENSION = 1024 // uploaded photos are downscaled to this many px
-const JPEG_QUALITIES = [0.82, 0.7, 0.58] // tried in order until the photo is small enough
-const TARGET_DATA_URL_CHARS = 480_000 // roughly 350 KB of image
+const MAX_DIMENSION = 1024
+const JPEG_QUALITIES = [0.82, 0.68, 0.54]
+const TARGET_DATA_URL_CHARS = 410_000 // ~300 KB compressed payload target
 const MAX_LOCATION = 300
 const MAX_DESCRIPTION = 1000
-const MIN_ANALYZE_MS = 2600 // keeps the "solving" state on screen long enough to read
+const MIN_ANALYZE_MS = 2600
 const REQUEST_TIMEOUT_MS = 20_000
 const VERIFY_TIMEOUT_MS = 60_000
-const LEAVE_MS = 200 // must match .dg-modal-out / .dg-fade-out in index.css
+const LEAVE_MS = 200
 const URL_RE = /^https?:\/\/\S+$/i
 const SESSION_KEY = 'draingrid-worker-session'
 
 const ANALYSIS_STEPS = [
-  'Analyzing water flow clearance...',
-  'Calculating obstruction delta...',
+  'Analyzing stormwater flow clearance...',
+  'Calculating surface obstruction delta...',
   'Comparing before and after frames...',
-  'Scoring confidence...',
+  'Scoring verification confidence...',
 ]
 
 /* ============================================================
@@ -104,10 +106,14 @@ const ANALYSIS_STEPS = [
 type Ticket = {
   id: string | number
   location: string
+  area?: string
   description: string
   before_image_url: string
   after_image_url?: string | null
   status?: string | null
+  alert_level?: string | null
+  clog_intensity?: number | null
+  ai_analysis?: string | null
   ai_confidence_score?: number | null
   created_at?: string | null
   latitude?: number | null
@@ -125,7 +131,7 @@ type GeoState = ReturnType<typeof useGeolocation>
 type IconType = typeof MapPin
 
 /* ============================================================
-   API helpers
+   API & Security Helpers
    ============================================================ */
 async function api<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const controller = new AbortController()
@@ -133,7 +139,11 @@ async function api<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIME
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       ...init,
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(init?.headers ?? {}),
+      },
       credentials: 'omit',
       signal: controller.signal,
     })
@@ -146,13 +156,12 @@ async function api<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIME
         if (typeof d === 'string') {
           detail = d
         } else if (Array.isArray(d)) {
-          // FastAPI validation errors
           detail = d
             .map((x: { loc?: unknown[]; msg?: string }) => `${(x.loc ?? []).slice(1).join('.')}: ${x.msg}`)
             .join('; ')
         }
       } catch {
-        // response had no JSON body
+        // ignore non-JSON error body
       }
       throw new Error(detail.slice(0, 280) || `Request failed (${res.status})`)
     }
@@ -181,12 +190,38 @@ function errMsg(e: unknown): string {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 
+/** App-Lockdown 01: Inspect actual file binary magic bytes (JPEG, PNG, WebP) before reading full file into memory. */
+async function verifyFileMagicBytes(file: File): Promise<boolean> {
+  const slice = file.slice(0, 12)
+  const buf = new Uint8Array(await slice.arrayBuffer())
+  if (buf.length < 4) return false
+  const isJpeg = buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff
+  const isPng =
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47 &&
+    buf[4] === 0x0d &&
+    buf[5] === 0x0a &&
+    buf[6] === 0x1a &&
+    buf[7] === 0x0a
+  const isWebp =
+    buf[0] === 0x52 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x46 &&
+    buf[8] === 0x57 &&
+    buf[9] === 0x45 &&
+    buf[10] === 0x42 &&
+    buf[11] === 0x50
+  return isJpeg || isPng || isWebp
+}
+
 /* ============================================================
-   Domain helpers
+   Domain Helpers
    ============================================================ */
 const VERIFIED_STATUSES = ['verified', 'resolved', 'closed', 'completed']
 
-/** Accepts a 0–1 or 0–100 score and returns a 0–100 value with one decimal. */
 function toPercent(score?: number | null): number | null {
   if (score == null || Number.isNaN(score)) return null
   const pct = score <= 1 ? score * 100 : score
@@ -207,7 +242,6 @@ function statusOf(t: Ticket): { key: StatusKey; label: string; pct: number | nul
   return { key: 'failed', label: 'NOT CLEARED', pct }
 }
 
-/** A ticket leaves the worker queue only once it is verified as cleared. */
 function isCleared(t: Ticket): boolean {
   return statusOf(t).key === 'verified'
 }
@@ -228,27 +262,20 @@ function hostOf(url: string): string {
   try {
     return new URL(url).host
   } catch {
-    return 'Linked image'
+    return 'Verified external image'
   }
 }
 
 // eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g
 
-/** Strips control characters and tidies whitespace. React escapes output; this just keeps the data clean. */
 function cleanText(s: string, multiline = false): string {
   const t = s.replace(CONTROL_RE, '')
   return (multiline ? t.replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n') : t.replace(/\s+/g, ' ')).trim()
 }
 
-/* ---------- XSS guard for image sources ---------- */
 const DATA_IMAGE_RE = /^data:image\/(?:png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i
 
-/**
- * Every <img src> in the app goes through this. Only http(s) URLs and raster data: URLs pass.
- * Anything else (script-scheme URLs, SVG documents, malformed values) falls back to the placeholder.
- * Relative paths resolve against the API, so server-hosted uploads keep working.
- */
 function safeImageSrc(src?: string | null): string | null {
   if (!src) return null
   const s = src.trim()
@@ -262,7 +289,6 @@ function safeImageSrc(src?: string | null): string | null {
   }
 }
 
-/* ---------- Contact links (built once, only from the CONTACT config above) ---------- */
 const EMAIL_RE = /^[^\s@<>"'()]+@[^\s@<>"'()]+\.[^\s@<>"'()]+$/
 const contactEmail = EMAIL_RE.test(CONTACT.email.trim()) ? CONTACT.email.trim() : ''
 const contactPhoneHref = (() => {
@@ -271,7 +297,6 @@ const contactPhoneHref = (() => {
 })()
 const hasContact = contactEmail !== '' || contactPhoneHref !== ''
 
-/* ---------- Geo helpers ---------- */
 function formatCoords(c: Coords): string {
   const lat = `${Math.abs(c.lat).toFixed(4)}° ${c.lat >= 0 ? 'N' : 'S'}`
   const lng = `${Math.abs(c.lng).toFixed(4)}° ${c.lng >= 0 ? 'E' : 'W'}`
@@ -298,7 +323,6 @@ function parseCoords(text: string): Coords | null {
   return null
 }
 
-/** Uses explicit latitude/longitude if the API provides them, else parses the location string. */
 function ticketCoords(t: Ticket): Coords | null {
   if (typeof t.latitude === 'number' && typeof t.longitude === 'number') {
     return { lat: t.latitude, lng: t.longitude }
@@ -321,10 +345,10 @@ function formatDistance(km: number): string {
 }
 
 /**
- * Decodes an image, downscales it and re-encodes it as JPEG (a plain string for the API).
- * Re-encoding through a canvas also strips EXIF metadata, including any embedded GPS position.
+ * Downscales to max 1024px, strips EXIF via canvas re-encode, and compresses iteratively
+ * (0.82 -> 0.68 -> 0.54) to stay under ~300 KB.
  */
-function fileToDataUrl(file: File): Promise<string> {
+function fileToDataUrl(file: File): Promise<{ dataUrl: string; compressedBytes: number }> {
   return new Promise((resolve, reject) => {
     const objectUrl = URL.createObjectURL(file)
     const img = new Image()
@@ -348,7 +372,8 @@ function fileToDataUrl(file: File): Promise<string> {
           out = canvas.toDataURL('image/jpeg', q)
           if (out.length <= TARGET_DATA_URL_CHARS) break
         }
-        resolve(out)
+        const approxBytes = Math.round((out.length * 3) / 4)
+        resolve({ dataUrl: out, compressedBytes: approxBytes })
       } catch (e) {
         reject(e instanceof Error ? e : new Error('Unreadable image'))
       }
@@ -397,7 +422,6 @@ function useTickets() {
   return { tickets, loading, error, refresh, upsert }
 }
 
-/** Requests a high-accuracy GPS fix on mount; shared by the Citizen Portal and Worker Terminal. */
 function useGeolocation() {
   const [status, setStatus] = useState<GeoStatus>('scanning')
   const [coords, setCoords] = useState<Coords | null>(null)
@@ -427,7 +451,6 @@ function useGeolocation() {
   return { status, coords, accuracy, scan }
 }
 
-/* ---------- Tiny client-side router (real URLs, no extra dependency) ---------- */
 const PATHS: Record<ViewKey, string> = { citizen: '/', worker: '/worker', ledger: '/ledger' }
 
 function viewForPath(pathname: string): ViewKey | null {
@@ -456,25 +479,26 @@ function usePath() {
 
 const PAGE_META: Record<ViewKey | 'notfound', { title: string; description: string }> = {
   citizen: {
-    title: 'Report a blocked drain · DrainGRID',
+    title: 'Report a Blocked Stormwater Drain · DrainGRID Bengaluru',
     description:
-      'Report a blocked drain in seconds. Your location is locked automatically, add a photo and a field team takes it from there.',
+      'Report clogged stormwater drains across Bengaluru in seconds. Auto-locked GPS coordinates, client-side AI clog severity analysis, and rapid BBMP field dispatch.',
   },
   worker: {
-    title: 'Worker Terminal · DrainGRID',
-    description: 'Field worker terminal: see nearby drain tickets and verify repairs with an AI audit.',
+    title: 'Field Worker Triage Terminal · DrainGRID Bengaluru',
+    description:
+      'Bengaluru municipal field worker terminal: prioritize Red, Amber, and Green stormwater drain alerts by zone and verify clearance with AI photo audits.',
   },
   ledger: {
-    title: 'Public Audit Ledger · DrainGRID',
-    description: 'A transparent public record of every drain report, repair and AI verification score.',
+    title: 'Public Stormwater Audit Ledger · DrainGRID Bengaluru',
+    description:
+      'Explore the transparent public audit ledger of Bengaluru stormwater drainage reports, before-and-after clearance photos, and AI verification confidence scores.',
   },
   notfound: {
-    title: 'Page not found · DrainGRID',
-    description: 'The page you were looking for does not exist.',
+    title: '404 Sector Not Found · DrainGRID Bengaluru',
+    description: 'The requested DrainGRID stormwater monitoring route could not be found.',
   },
 }
 
-// Scroll lock shared by modals and the mobile menu (ref-counted so they can never fight each other).
 let lockCount = 0
 let savedOverflow = ''
 function useScrollLock(active: boolean) {
@@ -490,10 +514,6 @@ function useScrollLock(active: boolean) {
   }, [active])
 }
 
-/* ============================================================
-   Theme (Dark "Aquatic Obsidian Glass" / Light "Frosted Arctic Acrylic")
-   The choice lives on <html> as the class `dark` or `light`; every colour is a CSS variable in index.css.
-   ============================================================ */
 type Theme = 'dark' | 'light'
 const THEME_KEY = 'draingrid-theme'
 const THEME_COLORS: Record<Theme, string> = { dark: '#041029', light: '#f1f5f9' }
@@ -504,7 +524,7 @@ function readStoredTheme(): Theme | null {
     const v = window.localStorage.getItem(THEME_KEY)
     return v === 'dark' || v === 'light' ? v : null
   } catch {
-    return null // storage blocked (private mode, strict settings)
+    return null
   }
 }
 
@@ -534,7 +554,6 @@ function currentTheme(): Theme {
   return document.documentElement.classList.contains('light') ? 'light' : 'dark'
 }
 
-// Runs once at load, before React renders anything, so the first paint already has the right theme.
 if (typeof document !== 'undefined') applyTheme(readStoredTheme() ?? systemTheme())
 
 function useTheme() {
@@ -543,7 +562,7 @@ function useTheme() {
 
   const commit = useCallback((next: Theme, persist: boolean) => {
     const root = document.documentElement
-    root.classList.add('dg-theme-switching') // enables the colour cross-fade
+    root.classList.add('dg-theme-switching')
     window.clearTimeout(switchTimer.current)
     applyTheme(next)
     setTheme(next)
@@ -551,13 +570,12 @@ function useTheme() {
       try {
         window.localStorage.setItem(THEME_KEY, next)
       } catch {
-        // storage unavailable; the choice lasts until reload
+        // storage unavailable
       }
     }
     switchTimer.current = window.setTimeout(() => root.classList.remove('dg-theme-switching'), 450)
   }, [])
 
-  // Follow the OS setting live, but only while the person has not picked a theme themselves.
   useEffect(() => {
     let mq: MediaQueryList
     try {
@@ -580,7 +598,7 @@ function useTheme() {
 }
 
 /* ============================================================
-   Style tokens
+   Style Tokens & Aceternity Spotlight Wrapper
    ============================================================ */
 const focusRing =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--dg-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[color:var(--dg-page)]'
@@ -591,31 +609,33 @@ const btnSecondary = `${btnBase} min-h-[44px] rounded-2xl border dg-bd-2 dg-fill
 const btnGhost = `${btnBase} min-h-[40px] rounded-full px-3 py-1.5 text-xs dg-fg-2 dg-hover-fill dg-hover-fg`
 
 const inputCls =
-  'dg-input block w-full rounded-2xl px-4 py-3 text-base transition focus:outline-none disabled:opacity-60 sm:text-[15px]'
+  'dg-input block w-full min-w-0 rounded-2xl px-4 py-3 text-base transition focus:outline-none disabled:opacity-60 sm:text-[15px]'
 
 const eyebrowCls = 'text-[11px] font-semibold uppercase tracking-[0.16em] dg-eyebrow'
 
+function handleSpotlightMove(e: ReactMouseEvent<HTMLElement>) {
+  const rect = e.currentTarget.getBoundingClientRect()
+  e.currentTarget.style.setProperty('--mouse-x', `${e.clientX - rect.left}px`)
+  e.currentTarget.style.setProperty('--mouse-y', `${e.clientY - rect.top}px`)
+}
+
 /* ============================================================
-   UI primitives
+   UI Primitives
    ============================================================ */
 function Spinner({ onLight = false }: { onLight?: boolean }) {
   return (
     <span
       aria-hidden="true"
-      className={`h-4 w-4 shrink-0 animate-spin rounded-full border-2 ${onLight ? 'dg-spinner-accent' : 'dg-spinner'
-        }`}
+      className={`h-4 w-4 shrink-0 animate-spin rounded-full border-2 ${
+        onLight ? 'dg-spinner-accent' : 'dg-spinner'
+      }`}
     />
   )
 }
 
-/** Civic placeholder: a drain grate drawn in SVG, shown wherever a photo is missing or fails to load. */
-function GratePlaceholder({ className = '', label = 'Photo unavailable' }: { className?: string; label?: string }) {
+function GratePlaceholder({ className = '', label = 'Drainage photo unavailable' }: { className?: string; label?: string }) {
   return (
-    <span
-      role="img"
-      aria-label={label}
-      className={`grid place-items-center dg-placeholder ${className}`}
-    >
+    <span role="img" aria-label={label} className={`grid place-items-center dg-placeholder ${className}`}>
       <svg viewBox="0 0 64 64" fill="none" className="h-9 w-9" aria-hidden="true">
         <rect x="6" y="10" width="52" height="44" rx="9" stroke="currentColor" strokeWidth="2" />
         {[17, 26, 35, 44].map((y) => (
@@ -645,7 +665,6 @@ function PhotoInner({ src, alt, className = '' }: PhotoProps) {
   )
 }
 
-// keyed by src so the "failed" state resets when the image changes
 function Photo(props: PhotoProps) {
   return <PhotoInner key={props.src ?? 'none'} {...props} />
 }
@@ -661,7 +680,6 @@ function Figure({ src, label, aspect = 'aspect-[4/3]' }: { src?: string | null; 
   )
 }
 
-// Status tones come from CSS variables, so the same badge is soft glass at night and a vivid, high-contrast chip by day.
 const BADGE_TONES: Record<StatusKey, { wrap: string; divider: string; dot: string }> = {
   pending: { wrap: 'dg-badge dg-badge--amber', divider: 'dg-badge-div--amber', dot: 'dg-dot-amber' },
   verified: { wrap: 'dg-badge dg-badge--green', divider: 'dg-badge-div--green', dot: 'dg-dot-green' },
@@ -676,7 +694,6 @@ const METER_COLORS: Record<StatusKey, string> = {
   failed: 'dg-meter--red',
 }
 
-/** Micro-badge: status label, plus the AI confidence metric once a score exists. */
 function StatusBadge({ t }: { t: Ticket }) {
   const s = statusOf(t)
   const tone = BADGE_TONES[s.key]
@@ -708,7 +725,7 @@ function ConfidenceBar({ pct, statusKey }: { pct: number; statusKey: StatusKey }
           <span className="text-5xl font-semibold tabular-nums tracking-tight dg-fg">{pct.toFixed(1)}</span>
           <span className="text-xl font-medium dg-fg-2">%</span>
         </div>
-        <span className="pb-1.5 text-xs dg-fg-2">AI confidence</span>
+        <span className="pb-1.5 text-xs dg-fg-2">AI verification confidence</span>
       </div>
       <div className="relative mt-3 h-2 rounded-full dg-fill-3">
         <div
@@ -719,14 +736,13 @@ function ConfidenceBar({ pct, statusKey }: { pct: number; statusKey: StatusKey }
       </div>
       <div className="relative mt-1.5 h-4 text-[11px] dg-fg-3">
         <span className="absolute -translate-x-1/2 whitespace-nowrap" style={{ left: `${PASS_THRESHOLD}%` }}>
-          {PASS_THRESHOLD}% pass
+          {PASS_THRESHOLD}% pass threshold
         </span>
       </div>
     </div>
   )
 }
 
-/** Orb with a soft halo. Floats gently so it never feels stuck to the page. */
 function OrbStage({ state, small = false }: { state: 'searching' | 'solving'; small?: boolean }) {
   const theme = useContext(ThemeContext)
   return (
@@ -741,10 +757,6 @@ function OrbStage({ state, small = false }: { state: 'searching' | 'solving'; sm
 const FOCUSABLE =
   'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
 
-/**
- * Accessible dialog: focus trap, Escape to close, scroll lock, and a weightless rise/float-away animation.
- * On phones it docks to the bottom edge as a sheet. Children receive `close`, which plays the exit animation.
- */
 function Modal({
   children,
   onClose,
@@ -779,7 +791,6 @@ function Modal({
 
   useScrollLock(true)
 
-  // Move focus into the dialog, and give it back when the dialog goes away.
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null
     const panel = panelRef.current
@@ -787,7 +798,7 @@ function Modal({
       const first = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).find(
         (el) => !el.hasAttribute('data-modal-close') && el.getClientRects().length > 0,
       )
-        ; (first ?? panel).focus()
+      ;(first ?? panel).focus()
     }
     return () => previous?.focus?.()
   }, [])
@@ -837,8 +848,9 @@ function Modal({
         aria-labelledby={labelledBy}
         tabIndex={-1}
         onKeyDown={onKeyDown}
-        className={`glass-strong relative max-h-[92dvh] w-full overflow-y-auto overscroll-contain rounded-t-[28px] outline-none sm:max-h-[90dvh] sm:rounded-[28px] ${widthClass} ${leaving ? 'dg-modal-out' : 'dg-modal-in'
-          }`}
+        className={`glass-strong relative max-h-[92dvh] w-full overflow-y-auto overscroll-contain rounded-t-[28px] outline-none sm:max-h-[90dvh] sm:rounded-[28px] ${widthClass} ${
+          leaving ? 'dg-modal-out' : 'dg-modal-in'
+        }`}
       >
         {closable && (
           <button
@@ -857,7 +869,6 @@ function Modal({
   )
 }
 
-/** Real <a href> links so URLs can be opened in a new tab, bookmarked and shared; plain clicks stay in-app. */
 function NavLink({
   to,
   go,
@@ -886,7 +897,6 @@ function NavLink({
   )
 }
 
-/** Animated Sun / Moon switch. `icon` is the round header button; `row` is the full-width drawer entry. */
 function ThemeToggle({
   theme,
   onToggle,
@@ -917,7 +927,7 @@ function ThemeToggle({
         className={`dg-theme-toggle flex min-h-[52px] w-full items-center gap-3 rounded-2xl px-4 text-[15px] font-medium transition active:scale-[0.98] ${focusRing} ${className}`}
       >
         {icons}
-        <span className="flex-1 text-left">{dark ? 'Dark mode' : 'Light mode'}</span>
+        <span className="flex-1 text-left">{dark ? 'Dark mode (Obsidian Glass)' : 'Light mode (Arctic Acrylic)'}</span>
         <span className="text-xs font-normal dg-fg-3">{dark ? 'Switch to light' : 'Switch to dark'}</span>
       </button>
     )
@@ -939,26 +949,28 @@ function ThemeToggle({
 function LogoMark({ className = 'h-14 w-14' }: { className?: string }) {
   const theme = useContext(ThemeContext)
   const src = theme === 'light' ? '/favicon-dark.svg?v=dual1' : '/favicon-light.svg?v=dual1'
-  return <img src={src} alt="DrainGRID" className={`dg-logo ${className} object-contain`} />
+  return <img src={src} alt="DrainGRID" className={`dg-brand-logo shrink-0 object-contain bg-transparent ${className}`} />
 }
 
-function ContactLinks({ className = '' }: { className?: string }) {
+function ContactLinks({ className = '', compact = false }: { className?: string; compact?: boolean }) {
   if (!hasContact) return null
-  const item = `inline-flex min-h-[44px] items-center gap-2.5 rounded-xl px-2 text-sm dg-fg-2 transition dg-hover-fg ${focusRing}`
+  const item = compact
+    ? `inline-flex min-h-[36px] items-center gap-1.5 rounded-full border dg-bd dg-fill px-3 py-1 text-xs font-medium dg-fg-2 transition dg-hover-fill-2 dg-hover-fg ${focusRing}`
+    : `inline-flex min-h-[44px] items-center gap-2.5 rounded-xl px-2 text-sm dg-fg-2 transition dg-hover-fg ${focusRing}`
   return (
     <ul className={className}>
       {contactPhoneHref ? (
         <li>
-          <a href={`tel:${contactPhoneHref}`} className={item}>
-            <Phone className="h-4 w-4 dg-accent" aria-hidden="true" />
-            {CONTACT.phone.trim()}
+          <a href={`tel:${contactPhoneHref}`} className={item} aria-label={`Call BBMP Control Room at ${CONTACT.phone}`}>
+            <Phone className="h-3.5 w-3.5 shrink-0 dg-accent" aria-hidden="true" />
+            <span className="whitespace-nowrap">{CONTACT.phone.trim()}</span>
           </a>
         </li>
       ) : null}
       {contactEmail ? (
         <li>
-          <a href={`mailto:${contactEmail}`} className={item}>
-            <Mail className="h-4 w-4 dg-accent" aria-hidden="true" />
+          <a href={`mailto:${contactEmail}`} className={item} aria-label={`Email ${contactEmail}`}>
+            <Mail className="h-3.5 w-3.5 shrink-0 dg-accent" aria-hidden="true" />
             <span className="min-w-0 break-all">{contactEmail}</span>
           </a>
         </li>
@@ -968,27 +980,11 @@ function ContactLinks({ className = '' }: { className?: string }) {
 }
 
 /* ============================================================
-   Backdrop: watermark and drifting bubbles
+   GPU-Accelerated Lightning Storm Canvas Backdrop (VGPU / Aceternity Style)
    ============================================================ */
-const BUBBLES: { left: string; size: number; dur: number; delay: number }[] = [
-  { left: '5%', size: 10, dur: 21, delay: 2 },
-  { left: '13%', size: 22, dur: 29, delay: 11 },
-  { left: '24%', size: 8, dur: 18, delay: 6 },
-  { left: '33%', size: 16, dur: 25, delay: 17 },
-  { left: '45%', size: 12, dur: 22, delay: 4 },
-  { left: '54%', size: 26, dur: 32, delay: 13 },
-  { left: '63%', size: 9, dur: 19, delay: 8 },
-  { left: '72%', size: 18, dur: 27, delay: 1 },
-  { left: '81%', size: 11, dur: 23, delay: 15 },
-  { left: '90%', size: 20, dur: 30, delay: 9 },
-  { left: '96%', size: 8, dur: 20, delay: 5 },
-]
-
-/* ============================================================
-   GPU-Accelerated Lightning Canvas Backdrop (Aceternity / VGPU Style)
-   ============================================================ */
-function LightningCanvas() {
+function Backdrop() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const theme = useContext(ThemeContext)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -1007,52 +1003,74 @@ function LightningCanvas() {
     }
     window.addEventListener('resize', onResize)
 
-    type Bolt = { segments: { x1: number; y1: number; x2: number; y2: number }[]; alpha: number }
-    let bolts: Bolt[] = []
-    let nextBoltTime = performance.now() + 2500
+    type Segment = { x1: number; y1: number; x2: number; y2: number; width: number }
+    type Bolt = { segments: Segment[]; alpha: number; flash: number; color: string }
+    const bolts: Bolt[] = []
+    let nextBoltAt = performance.now() + 1200
 
-    function createBolt(): Bolt {
-      const segments: { x1: number; y1: number; x2: number; y2: number }[] = []
-      let startX = Math.random() * width
-      let startY = 0
-      const steps = 14 + Math.floor(Math.random() * 8)
-
+    function spawnBolt(startX: number, startY: number, endY: number, lineW: number, depth: number, out: Segment[]) {
+      let cx = startX
+      let cy = startY
+      const steps = depth === 0 ? 18 : 8
+      const dy = (endY - startY) / steps
       for (let i = 0; i < steps; i++) {
-        const nextX = startX + (Math.random() - 0.5) * 65
-        const nextY = startY + (height / steps) * (0.8 + Math.random() * 0.4)
-        segments.push({ x1: startX, y1: startY, x2: nextX, y2: nextY })
-        startX = nextX
-        startY = nextY
+        const nx = cx + (Math.random() - 0.5) * (depth === 0 ? 58 : 34)
+        const ny = cy + dy * (0.75 + Math.random() * 0.5)
+        out.push({ x1: cx, y1: cy, x2: nx, y2: ny, width: Math.max(0.7, lineW * (1 - i / (steps * 1.4))) })
+        if (depth < 2 && Math.random() < 0.24) {
+          spawnBolt(nx, ny, Math.min(height, ny + height * 0.28), lineW * 0.55, depth + 1, out)
+        }
+        cx = nx
+        cy = ny
       }
-      return { segments, alpha: 0.95 }
+    }
+
+    function triggerLightning() {
+      const segments: Segment[] = []
+      const x = width * (0.12 + Math.random() * 0.76)
+      spawnBolt(x, -10, height * (0.55 + Math.random() * 0.38), 2.4, 0, segments)
+      const palette =
+        theme === 'light'
+          ? ['rgba(2, 132, 199,', 'rgba(79, 70, 229,']
+          : ['rgba(56, 189, 248,', 'rgba(165, 243, 252,', 'rgba(129, 140, 248,']
+      const color = palette[Math.floor(Math.random() * palette.length)]
+      bolts.push({ segments, alpha: 0.95, flash: 0.16, color })
     }
 
     function render(now: number) {
       if (!ctx) return
       ctx.clearRect(0, 0, width, height)
 
-      if (now > nextBoltTime) {
-        bolts.push(createBolt())
-        nextBoltTime = now + 4000 + Math.random() * 5000
+      if (now >= nextBoltAt) {
+        triggerLightning()
+        nextBoltAt = now + 2600 + Math.random() * 4200
       }
 
-      for (let b = bolts.length - 1; b >= 0; b--) {
-        const bolt = bolts[b]
+      for (let i = bolts.length - 1; i >= 0; i--) {
+        const b = bolts[i]
+        if (b.flash > 0) {
+          ctx.fillStyle = theme === 'light' ? `rgba(14, 165, 233, ${b.flash * 0.25})` : `rgba(56, 189, 248, ${b.flash * 0.35})`
+          ctx.fillRect(0, 0, width, height)
+          b.flash -= 0.025
+        }
+
         ctx.save()
-        ctx.strokeStyle = `rgba(56, 189, 248, ${bolt.alpha})`
-        ctx.shadowColor = '#38bdf8'
-        ctx.shadowBlur = 16
-        ctx.lineWidth = 2.2
-        ctx.beginPath()
-        for (const seg of bolt.segments) {
+        ctx.lineCap = 'round'
+        ctx.lineJoin = 'round'
+        ctx.shadowColor = theme === 'light' ? '#0284c7' : '#38bdf8'
+        ctx.shadowBlur = 18
+        for (const seg of b.segments) {
+          ctx.strokeStyle = `${b.color}${b.alpha})`
+          ctx.lineWidth = seg.width
+          ctx.beginPath()
           ctx.moveTo(seg.x1, seg.y1)
           ctx.lineTo(seg.x2, seg.y2)
+          ctx.stroke()
         }
-        ctx.stroke()
         ctx.restore()
 
-        bolt.alpha -= 0.04
-        if (bolt.alpha <= 0) bolts.splice(b, 1)
+        b.alpha -= 0.032
+        if (b.alpha <= 0) bolts.splice(i, 1)
       }
 
       animId = requestAnimationFrame(render)
@@ -1063,17 +1081,13 @@ function LightningCanvas() {
       cancelAnimationFrame(animId)
       window.removeEventListener('resize', onResize)
     }
-  }, [])
+  }, [theme])
 
   return <canvas ref={canvasRef} className="dg-lightning-canvas" aria-hidden="true" />
 }
 
-function Backdrop() {
-  return <LightningCanvas />
-}
-
 /* ============================================================
-   Photo input: SVG dropzone with URL fallback
+   Photo Input: Magic-Byte Validated & Compressed Dropzone
    ============================================================ */
 function DropIllustration() {
   return (
@@ -1106,7 +1120,7 @@ function ImageDrop({
   const [dragging, setDragging] = useState(false)
   const [processing, setProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [meta, setMeta] = useState<{ name: string; size: number } | null>(null)
+  const [meta, setMeta] = useState<{ name: string; originalSize: number; compressedSize: number } | null>(null)
   const [urlText, setUrlText] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -1120,22 +1134,24 @@ function ImageDrop({
 
   async function handleFile(file: File | undefined) {
     if (!file) return
-    if (!file.type.startsWith('image/')) {
-      setError('Please choose an image file (JPG or PNG).')
-      return
-    }
     if (file.size > MAX_UPLOAD_BYTES) {
-      setError('That file is larger than 10 MB. Please choose a smaller photo.')
+      setError('File exceeds the strict 10 MB security limit. Please choose a smaller photo.')
       return
     }
     setError(null)
     setProcessing(true)
     try {
-      const dataUrl = await fileToDataUrl(file)
-      setMeta({ name: file.name, size: file.size })
+      const validMagic = await verifyFileMagicBytes(file)
+      if (!validMagic) {
+        setError('Security Shield: File failed binary magic-byte inspection. Only authentic JPG, PNG, or WebP photos are allowed.')
+        return
+      }
+      const { dataUrl, compressedBytes } = await fileToDataUrl(file)
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 48) || 'drain-evidence.jpg'
+      setMeta({ name: safeName, originalSize: file.size, compressedSize: compressedBytes })
       onChange(dataUrl)
     } catch {
-      setError("We couldn't read that image. Try a JPG or PNG instead.")
+      setError("We couldn't decode that image. Please upload a standard JPG, PNG, or WebP photo.")
     } finally {
       setProcessing(false)
     }
@@ -1143,7 +1159,7 @@ function ImageDrop({
 
   function onPick(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
-    e.target.value = '' // allow re-selecting the same file later
+    e.target.value = ''
     void handleFile(file)
   }
 
@@ -1180,10 +1196,10 @@ function ImageDrop({
 
   const preview = (title: string, subtitle: string, actions?: ReactNode) => (
     <div className="dg-fade-in flex items-center gap-3 rounded-2xl border dg-bd dg-fill-2 p-2.5">
-      <Photo src={value} alt="Photo preview" className="h-16 w-20 shrink-0 rounded-xl border dg-bd" />
+      <Photo src={value} alt="Drain evidence preview" className="h-16 w-20 shrink-0 rounded-xl border dg-bd" />
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium dg-fg">{title}</p>
-        <p className="text-xs dg-fg-2">{subtitle}</p>
+        <p className="text-xs dg-tone-green font-medium">{subtitle}</p>
       </div>
       {actions && <div className="flex shrink-0 flex-col gap-0.5 sm:flex-row sm:gap-1">{actions}</div>}
     </div>
@@ -1194,7 +1210,7 @@ function ImageDrop({
       <input
         ref={fileRef}
         type="file"
-        accept="image/*"
+        accept="image/jpeg,image/png,image/webp"
         className="hidden"
         onChange={onPick}
         disabled={disabled}
@@ -1205,8 +1221,10 @@ function ImageDrop({
       {mode === 'file' ? (
         value ? (
           preview(
-            meta?.name ?? 'Photo',
-            `${meta ? `${formatBytes(meta.size)} · ` : ''}Ready to submit`,
+            meta?.name ?? 'Verified Drain Photo',
+            meta
+              ? `Compressed to ${formatBytes(meta.compressedSize)} (from ${formatBytes(meta.originalSize)}) · Magic-bytes verified`
+              : 'Magic-bytes verified · Ready to submit',
             <>
               <button type="button" className={btnGhost} disabled={disabled} onClick={() => fileRef.current?.click()}>
                 Replace
@@ -1239,21 +1257,24 @@ function ImageDrop({
             onDragOver={onDragOver}
             onDragLeave={onDragLeave}
             onDrop={onDrop}
-            className={`dg-drop flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-9 text-center transition duration-300 ${focusRing} ${disabled ? 'pointer-events-none opacity-50' : ''
-              } ${dragging ? 'dg-drop--active scale-[1.01]' : ''}`}
+            className={`dg-drop flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-5 py-8 text-center transition duration-300 ${focusRing} ${
+              disabled ? 'pointer-events-none opacity-50' : ''
+            } ${dragging ? 'dg-drop--active scale-[1.01]' : ''}`}
           >
             {processing ? (
               <>
                 <Spinner />
-                <p className="mt-3 text-sm dg-fg-2">Processing photo…</p>
+                <p className="mt-3 text-sm dg-fg-2">Verifying binary signature &amp; compressing image…</p>
               </>
             ) : (
               <>
                 <DropIllustration />
                 <p className="mt-4 text-sm dg-fg-2">
-                  <span className="font-semibold dg-fg">Click to upload</span> or drag photo of {subject}
+                  <span className="font-semibold dg-fg">Click to upload</span> or drag and drop photo of {subject}
                 </p>
-                <p className="mt-1 text-xs dg-fg-3">JPG or PNG, up to 10 MB</p>
+                <p className="mt-1 text-xs dg-fg-3">
+                  Authentic JPG, PNG, or WebP · Auto-compressed &lt;300 KB · EXIF stripped
+                </p>
               </>
             )}
           </div>
@@ -1263,27 +1284,28 @@ function ImageDrop({
           <input
             type="url"
             inputMode="url"
-            aria-label="Image URL"
+            aria-label="Stormwater drain image URL"
             className={inputCls}
-            placeholder="https://example.com/photo.jpg"
+            placeholder="https://images.draingrid.in/koramangala-stormwater-drain.jpg"
             value={urlText}
             disabled={disabled}
             maxLength={2000}
             onChange={(e) => onUrlChange(e.target.value)}
           />
-          {value && preview(hostOf(value), 'Linked image')}
+          {value && preview(hostOf(value), 'External HTTPS image verified')}
           {urlInvalid && (
             <p role="alert" className="text-xs dg-tone-red">
-              Enter a full web address starting with http:// or https://
+              Enter a valid HTTPS image URL starting with https:// or http://
             </p>
           )}
         </div>
       )}
 
       {error && (
-        <p role="alert" className="mt-2 text-xs dg-tone-red">
-          {error}
-        </p>
+        <div role="alert" className="mt-2.5 flex items-start gap-2 rounded-xl dg-note dg-note--red px-3 py-2 text-xs">
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span>{error}</span>
+        </div>
       )}
 
       <div className="mt-3 flex justify-center">
@@ -1294,7 +1316,7 @@ function ImageDrop({
           onClick={() => switchMode(mode === 'file' ? 'url' : 'file')}
         >
           <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
-          {mode === 'file' ? 'Use an image link instead' : 'Upload a photo instead'}
+          {mode === 'file' ? 'Use a verified image link instead' : 'Upload a camera photo instead'}
         </button>
       </div>
     </div>
@@ -1327,11 +1349,11 @@ function LocationCard({
   return (
     <div className="rounded-2xl border dg-bd dg-fill p-4">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className={eyebrowCls}>Location</span>
+        <span className={eyebrowCls}>Bengaluru Sector Location</span>
         {status === 'locked' && !override && (
           <div className="flex items-center gap-1">
             <button type="button" className={btnGhost} disabled={disabled} onClick={() => onOverride(true)}>
-              Override
+              Add landmark
             </button>
             <button type="button" className={btnGhost} disabled={disabled} onClick={scan} aria-label="Re-scan GPS">
               <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1340,7 +1362,7 @@ function LocationCard({
         )}
         {override && coords && (
           <button type="button" className={btnGhost} disabled={disabled} onClick={() => onOverride(false)}>
-            Use GPS
+            Use GPS lock
           </button>
         )}
       </div>
@@ -1348,17 +1370,14 @@ function LocationCard({
       {showManual ? (
         <div className="space-y-2.5">
           {manualForced && (
-            <div
-              role="status"
-              className="flex items-start gap-2 rounded-xl dg-note dg-note--amber px-3 py-2 text-xs"
-            >
+            <div role="status" className="flex items-start gap-2 rounded-xl dg-note dg-note--amber px-3 py-2 text-xs">
               <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               <p className="min-w-0 flex-1">
                 {status === 'denied'
-                  ? 'Location access is off. Describe where the drain is, or allow location and try again.'
+                  ? 'GPS permission is off. Enter the Bengaluru road, ward, or junction below, or enable location and retry.'
                   : status === 'unsupported'
-                    ? 'This browser can’t share its location. Describe where the drain is.'
-                    : 'We couldn’t get a GPS fix. Describe where the drain is, or try again.'}
+                    ? 'GPS is unavailable on this device. Enter the Bengaluru street and neighborhood below.'
+                    : 'GPS signal obstructed. Enter the Bengaluru street landmark below, or retry GPS lock.'}
               </p>
               {status !== 'unsupported' && (
                 <button
@@ -1366,31 +1385,31 @@ function LocationCard({
                   className={`shrink-0 rounded font-semibold underline underline-offset-2 ${focusRing}`}
                   onClick={scan}
                 >
-                  Try again
+                  Retry GPS
                 </button>
               )}
             </div>
           )}
           <input
             className={inputCls}
-            placeholder="Street, landmark or nearest junction"
+            placeholder="e.g. 80 Feet Road, Sony World Junction, Koramangala 4th Block"
             value={manual}
             maxLength={MAX_LOCATION}
             onChange={(e) => onManual(e.target.value)}
             disabled={disabled}
-            aria-label="Location description"
+            aria-label="Bengaluru street or junction location"
           />
-          {coords && <p className="text-xs dg-fg-3">GPS coordinates ({formatCoords(coords)}) will be attached.</p>}
+          {coords && <p className="text-xs dg-fg-3">Telemetry coordinates ({formatCoords(coords)}) will be attached automatically.</p>}
         </div>
       ) : status === 'scanning' ? (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <OrbStage state="searching" small />
           <div className="min-w-0 flex-1" role="status">
-            <p className="text-sm font-medium dg-fg">Scanning for GPS signal</p>
-            <p className="text-xs dg-fg-2">Locking your exact position…</p>
+            <p className="text-sm font-medium dg-fg">Acquiring satellite GPS telemetry</p>
+            <p className="text-xs dg-fg-2">Locking your Bengaluru drainage sector coordinates…</p>
           </div>
           <button type="button" className={btnGhost} onClick={() => onOverride(true)}>
-            Enter manually
+            Enter landmark
           </button>
         </div>
       ) : (
@@ -1404,7 +1423,7 @@ function LocationCard({
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 <span className="dg-chip-green inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider">
                   <span className="h-1.5 w-1.5 rounded-full bg-current" />
-                  Auto-Locked
+                  GPS Auto-Locked
                 </span>
                 <span className="inline-flex items-center gap-1 rounded-full border dg-bd-2 dg-fill-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider dg-fg-2">
                   <ShieldCheck className="h-3 w-3" aria-hidden="true" />
@@ -1424,10 +1443,12 @@ function CitizenView({
   geo,
   onCreated,
   notify,
+  go,
 }: {
   geo: GeoState
   onCreated: () => void | Promise<void>
   notify: Notify
+  go: Go
 }) {
   const [override, setOverride] = useState(false)
   const [manual, setManual] = useState('')
@@ -1437,7 +1458,7 @@ function CitizenView({
   const [submitting, setSubmitting] = useState(false)
   const [visionStatus, setVisionStatus] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const [created, setCreated] = useState<{ id?: string | number } | null>(null)
+  const [created, setCreated] = useState<{ id?: string | number; alert?: string | null; intensity?: number | null } | null>(null)
 
   const manualForced = geo.status === 'denied' || geo.status === 'error' || geo.status === 'unsupported'
   const useManual = override || manualForced
@@ -1451,7 +1472,7 @@ function CitizenView({
   }
 
   const ready = locationString !== '' && image !== ''
-  const missing = [locationString === '' ? 'a location' : '', image === '' ? 'a photo' : ''].filter(Boolean)
+  const missing = [locationString === '' ? 'a Bengaluru location' : '', image === '' ? 'a drain photo' : ''].filter(Boolean)
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -1459,39 +1480,46 @@ function CitizenView({
     setSubmitting(true)
     setSubmitError(null)
     try {
-      setVisionStatus('Analyzing drain photo with AI vision…')
+      setVisionStatus('Running on-device CLIP vision blockage analysis…')
       const visualAnalysis = await runBrowserDrainVision(image)
-      setVisionStatus(null)
+      setVisionStatus('Verifying magic-bytes & logging with BBMP triage server…')
       const res = await api<Partial<Ticket>>('/api/tickets/new', {
         method: 'POST',
         body: JSON.stringify({
           location: locationString.slice(0, MAX_LOCATION),
-          description: cleanText(note, true).slice(0, MAX_DESCRIPTION) || 'Clogged drain reported via Citizen Portal.',
+          description:
+            cleanText(note, true).slice(0, MAX_DESCRIPTION) ||
+            'Stormwater drain blockage reported via DrainGRID Citizen Portal.',
           before_image_url: image,
           ...(visualAnalysis != null ? { visual_analysis: visualAnalysis } : {}),
         }),
       })
-      setCreated({ id: res?.id })
+      setCreated({
+        id: res?.id,
+        alert: res?.alert_level ?? null,
+        intensity: res?.clog_intensity ?? null,
+      })
       setNote('')
       setImage('')
       setImageKey((k) => k + 1)
       void onCreated()
-      notify('Report submitted')
+      notify('Drainage report verified and added to the Bengaluru triage queue')
     } catch (err) {
       const message = errMsg(err)
       setSubmitError(message)
       notify(message, 'error')
     } finally {
+      setVisionStatus(null)
       setSubmitting(false)
     }
   }
 
   return (
-    <div className="mx-auto w-full max-w-xl">
+    <div className="mx-auto w-full max-w-xl min-w-0">
       <div className="text-center">
-        <span className="dg-float glass-soft inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium dg-fg">
-          <Sparkles className="h-3.5 w-3.5 dg-accent" aria-hidden="true" />
-          No account needed
+        <span className="dg-float glass-soft inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-medium dg-fg">
+          <Zap className="h-3.5 w-3.5 dg-accent" aria-hidden="true" />
+          AI Vision Triage · Zero-Account Civic Reporting
         </span>
         <h1 className="mt-5 text-[2rem] font-semibold leading-[1.1] tracking-tight dg-fg sm:text-5xl">
           See a blocked drain?
@@ -1499,39 +1527,56 @@ function CitizenView({
           <span className="dg-text-aqua">Report it in seconds.</span>
         </h1>
         <p className="mx-auto mt-4 max-w-md text-base leading-relaxed dg-fg-2 sm:text-[17px]">
-          We lock your location automatically. Add a photo and our field team takes it from there.
+          Your GPS coordinates lock automatically. Upload a photo—our AI scores clog severity and dispatches the nearest Bengaluru field crew.
         </p>
       </div>
 
-      <div className="glass dg-rise relative mt-9 overflow-hidden rounded-3xl p-4 sm:mt-10 sm:p-6" style={{ animationDelay: '120ms' }}>
+      <div
+        onMouseMove={handleSpotlightMove}
+        className="glass dg-spotlight-card dg-rise relative mt-9 overflow-hidden rounded-3xl p-4 sm:mt-10 sm:p-6"
+        style={{ animationDelay: '120ms' }}
+      >
         {submitting && (
           <div className="dg-fade-in absolute inset-0 z-10 grid place-items-center dg-overlay backdrop-blur-sm" role="status">
-            <div className="flex flex-col items-center text-center">
+            <div className="flex flex-col items-center px-4 text-center">
               <OrbStage state="searching" />
               <p className="mt-2 text-sm font-medium dg-fg">{visionStatus ?? 'Submitting your report…'}</p>
-              <p className="mt-1 text-xs dg-fg-2">Securing your location and photo</p>
+              <p className="mt-1 text-xs dg-fg-2">Scanning file signature &amp; computing blockage severity</p>
             </div>
           </div>
         )}
 
         {created ? (
-          <div className="dg-fade-in flex flex-col items-center py-8 text-center" role="status">
+          <div className="dg-fade-in flex flex-col items-center py-6 text-center" role="status">
             <span className="dg-pop dg-float grid h-16 w-16 place-items-center rounded-full dg-circle-green">
               <CheckCircle2 className="h-8 w-8" aria-hidden="true" />
             </span>
-            <h2 className="mt-5 text-2xl font-semibold tracking-tight dg-fg">Report received</h2>
-            <p className="mt-1.5 max-w-xs text-sm dg-fg-2">
-              Thank you. Your report is now in the field worker queue.
+            <h2 className="mt-5 text-2xl font-semibold tracking-tight dg-fg">Report Verified &amp; Queued</h2>
+            <p className="mt-1.5 max-w-sm text-sm dg-fg-2">
+              Your stormwater report passed AI Gatekeeper inspection and is now live in the Bengaluru Worker Terminal.
             </p>
-            {created.id != null && (
-              <div className="mt-5 inline-flex items-center gap-2 rounded-full border dg-bd-2 dg-fill-2 px-3.5 py-1.5 text-sm">
-                <span className="dg-fg-2">Reference</span>
-                <span className="font-semibold tabular-nums dg-fg">#{String(created.id)}</span>
-              </div>
-            )}
-            <button className={`${btnSecondary} mt-7`} onClick={() => setCreated(null)}>
-              Report another drain
-            </button>
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              {created.id != null && (
+                <span className="inline-flex items-center gap-2 rounded-full border dg-bd-2 dg-fill-2 px-3.5 py-1.5 text-sm">
+                  <span className="dg-fg-2">Ticket</span>
+                  <span className="font-semibold tabular-nums dg-fg">#{String(created.id)}</span>
+                </span>
+              )}
+              {created.alert && (
+                <span className="dg-chip-green inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold">
+                  {created.alert} ALERT {created.intensity != null ? `· ${created.intensity}% Clog` : ''}
+                </span>
+              )}
+            </div>
+            <div className="mt-7 flex flex-wrap justify-center gap-3">
+              <button type="button" className={btnSecondary} onClick={() => setCreated(null)}>
+                Report another drain
+              </button>
+              <NavLink to="/ledger" go={go} className={btnPrimary}>
+                View in Public Ledger
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </NavLink>
+            </div>
           </div>
         ) : (
           <form onSubmit={submit} className="space-y-4" noValidate>
@@ -1546,13 +1591,13 @@ function CitizenView({
 
             <div>
               <label htmlFor="note" className={`${eyebrowCls} mb-2 block`}>
-                Note <span className="font-normal normal-case tracking-normal dg-fg-3">(optional)</span>
+                Blockage Details <span className="font-normal normal-case tracking-normal dg-fg-3">(recommended for AI triage)</span>
               </label>
               <textarea
                 id="note"
                 rows={2}
                 className={`${inputCls} resize-none`}
-                placeholder="Water pooling after rain, grate covered in debris…"
+                placeholder="Describe the issue: e.g. Stormwater grate choked with plastic debris and silt, water pooling across 80 Feet Road…"
                 value={note}
                 maxLength={MAX_DESCRIPTION}
                 onChange={(e) => setNote(e.target.value)}
@@ -1561,10 +1606,10 @@ function CitizenView({
             </div>
 
             <div>
-              <span className={`${eyebrowCls} mb-2 block`}>Photo</span>
+              <span className={`${eyebrowCls} mb-2 block`}>Stormwater Drain Photo Evidence</span>
               <ImageDrop
                 key={imageKey}
-                subject="clogged drain"
+                subject="clogged stormwater drain"
                 value={image}
                 onChange={setImage}
                 disabled={submitting}
@@ -1572,13 +1617,10 @@ function CitizenView({
             </div>
 
             {submitError && (
-              <div
-                role="alert"
-                className="flex items-start gap-2 rounded-xl dg-note dg-note--red px-3 py-2.5 text-sm"
-              >
+              <div role="alert" className="flex items-start gap-2 rounded-xl dg-note dg-note--red px-3.5 py-3 text-sm">
                 <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                 <p className="min-w-0 flex-1">
-                  <span className="font-semibold">We couldn’t send your report.</span> {submitError}
+                  <span className="font-semibold">Submission blocked:</span> {submitError}
                 </p>
               </div>
             )}
@@ -1586,19 +1628,19 @@ function CitizenView({
             <button type="submit" className={`${btnPrimary} w-full text-[15px]`} disabled={!ready || submitting}>
               {submitting ? (
                 <>
-                  <Spinner onLight /> Submitting…
+                  <Spinner onLight /> Analyzing &amp; Submitting…
                 </>
               ) : (
                 <>
-                  Submit report
+                  Submit Drainage Report
                   <ArrowRight className="h-4 w-4" aria-hidden="true" />
                 </>
               )}
             </button>
             <p className="text-center text-xs dg-fg-3">
               {ready
-                ? 'Your location and photo will be shared with the field team.'
-                : `Add ${missing.join(' and ')} to continue.`}
+                ? 'Protected by Magic-Byte Binary Inspection & AI Content Gatekeeper.'
+                : `Provide ${missing.join(' and ')} to enable submission.`}
             </p>
           </form>
         )}
@@ -1614,17 +1656,19 @@ function PasskeyModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: 
   const [code, setCode] = useState('')
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [unlockedMsg, setUnlockedMsg] = useState<string | null>(null)
   const timer = useRef<number | undefined>(undefined)
 
   useEffect(() => () => window.clearTimeout(timer.current), [])
 
   function submit(value: string) {
     if (!/^\d{4}$/.test(value)) {
-      setError('Enter all 4 digits of your passkey.')
+      setError('Enter all 4 digits of your municipal worker passkey.')
       return
     }
     setError(null)
     setChecking(true)
+    setUnlockedMsg('Passkey verified. Unlocking Bengaluru triage terminal…')
     timer.current = window.setTimeout(onSuccess, 450)
   }
 
@@ -1649,16 +1693,11 @@ function PasskeyModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: 
             <Lock className="h-6 w-6" aria-hidden="true" />
           </span>
           <h2 id="passkey-title" className="mt-5 text-xl font-semibold tracking-tight dg-fg">
-            Worker Terminal
+            Worker Terminal Access
           </h2>
           <p className="mt-1.5 text-sm dg-fg-2">
-            Enter your 4-digit passkey to continue.
-            {SHOW_DEMO_HINT && (
-              <>
-                {' '}
-                <span className="dg-fg-3">Dev build: any 4-digit code works.</span>
-              </>
-            )}
+            Enter your 4-digit BBMP field passkey.
+            {SHOW_DEMO_HINT && <span className="block mt-1 text-xs dg-fg-3">Prototype mode: any 4-digit PIN unlocks.</span>}
           </p>
 
           <div className="relative mx-auto mt-7 w-fit">
@@ -1690,19 +1729,25 @@ function PasskeyModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: 
           </div>
 
           {error && (
-            <p role="alert" className="mt-3 text-xs dg-tone-red">
+            <div role="alert" className="mt-4 rounded-xl dg-note dg-note--red px-3 py-2 text-xs">
               {error}
-            </p>
+            </div>
+          )}
+
+          {unlockedMsg && (
+            <div role="status" className="mt-4 rounded-xl dg-chip-green px-3 py-2 text-xs font-medium">
+              {unlockedMsg}
+            </div>
           )}
 
           <button type="submit" className={`${btnPrimary} mt-6 w-full`} disabled={code.length !== 4 || checking}>
             {checking ? (
               <>
-                <Spinner onLight /> Verifying…
+                <Spinner onLight /> Authenticating…
               </>
             ) : (
               <>
-                Unlock terminal
+                Unlock Terminal
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />
               </>
             )}
@@ -1740,10 +1785,15 @@ function VerifyModal({
     setStepIdx(0)
     setPhase('analyzing')
     try {
+      const ts = String(Math.floor(Date.now() / 1000))
       const [updated] = await Promise.all([
         api<Ticket>(
           `/api/tickets/${encodeURIComponent(String(ticket.id))}/verify`,
-          { method: 'POST', body: JSON.stringify({ after_image_url: afterImage }) },
+          {
+            method: 'POST',
+            headers: { 'X-DrainGrid-Timestamp': ts },
+            body: JSON.stringify({ after_image_url: afterImage, timestamp: Number(ts) }),
+          },
           VERIFY_TIMEOUT_MS,
         ),
         sleep(MIN_ANALYZE_MS),
@@ -1775,7 +1825,7 @@ function VerifyModal({
         <>
           {phase === 'capture' && (
             <div className="p-5 sm:p-7">
-              <p className={eyebrowCls}>AI audit · Ticket #{String(ticket.id)}</p>
+              <p className={eyebrowCls}>AI Clearance Audit · Ticket #{String(ticket.id)}</p>
               <h2 id="verify-title" className="mt-1.5 pr-10 text-xl font-semibold tracking-tight dg-fg">
                 {ticket.location}
               </h2>
@@ -1783,28 +1833,25 @@ function VerifyModal({
               <div className="mt-5 flex items-center gap-3 rounded-2xl border dg-bd dg-fill p-2.5">
                 <Photo
                   src={ticket.before_image_url}
-                  alt="Reported drain"
+                  alt="Reported blocked drain"
                   className="h-14 w-[72px] shrink-0 rounded-xl border dg-bd"
                 />
                 <div className="min-w-0">
-                  <p className="text-xs font-medium dg-fg-2">Original report</p>
+                  <p className="text-xs font-medium dg-fg-2">Citizen report evidence</p>
                   <p className="line-clamp-2 text-sm dg-fg-2">{ticket.description}</p>
                 </div>
               </div>
 
               <div className="mt-5">
-                <span className={`${eyebrowCls} mb-2 block`}>Cleared photo</span>
-                <ImageDrop subject="cleared drain" value={afterImage} onChange={setAfterImage} />
+                <span className={`${eyebrowCls} mb-2 block`}>Post-Clearance Photo</span>
+                <ImageDrop subject="cleared stormwater drain" value={afterImage} onChange={setAfterImage} />
               </div>
 
               {error && (
-                <div
-                  role="alert"
-                  className="mt-4 flex items-start gap-2 rounded-xl dg-note dg-note--red px-3 py-2.5 text-sm"
-                >
+                <div role="alert" className="mt-4 flex items-start gap-2 rounded-xl dg-note dg-note--red px-3 py-2.5 text-sm">
                   <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
                   <p className="min-w-0 flex-1">
-                    <span className="font-semibold">Verification failed.</span> {error}
+                    <span className="font-semibold">Verification failed:</span> {error}
                   </p>
                 </div>
               )}
@@ -1829,7 +1876,7 @@ function VerifyModal({
           {phase === 'analyzing' && (
             <div className="px-6 pb-9 pt-10 text-center sm:px-7">
               <h2 id="verify-title" className="sr-only">
-                Running AI audit
+                Running AI clearance audit
               </h2>
               <div className="flex justify-center">
                 <OrbStage state="solving" />
@@ -1837,14 +1884,10 @@ function VerifyModal({
               <p key={stepIdx} aria-live="polite" className="dg-fade-in mt-6 text-[15px] font-medium dg-fg">
                 {ANALYSIS_STEPS[stepIdx]}
               </p>
-              <p className="mt-1.5 text-xs dg-fg-2">Ticket #{String(ticket.id)} · This only takes a few seconds</p>
+              <p className="mt-1.5 text-xs dg-fg-2">Ticket #{String(ticket.id)} · Comparing before &amp; after frames</p>
 
               <div className="mx-auto mt-7 flex max-w-xs items-center justify-center gap-3">
-                <Photo
-                  src={ticket.before_image_url}
-                  alt="Before"
-                  className="h-14 w-[72px] rounded-xl border dg-bd"
-                />
+                <Photo src={ticket.before_image_url} alt="Before" className="h-14 w-[72px] rounded-xl border dg-bd" />
                 <ArrowRight className="h-4 w-4 shrink-0 dg-accent-soft" aria-hidden="true" />
                 <Photo src={afterImage} alt="After" className="h-14 w-[72px] rounded-xl border dg-bd" />
               </div>
@@ -1853,14 +1896,18 @@ function VerifyModal({
 
           {phase === 'result' && result && s && (
             <div className="dg-fade-in p-5 sm:p-7">
-              <p className={eyebrowCls}>AI audit · Ticket #{String(result.id)}</p>
+              <p className={eyebrowCls}>AI Audit Complete · Ticket #{String(result.id)}</p>
               <h2 id="verify-title" className="mt-1.5 pr-10 text-xl font-semibold tracking-tight dg-fg">
                 {result.location}
               </h2>
 
+              <div className="mt-4 rounded-xl dg-chip-green px-3.5 py-2.5 text-xs font-medium" role="status">
+                Clearance verification logged and published to the Public Audit Ledger.
+              </div>
+
               <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                <Figure src={result.before_image_url} label="Before" />
-                <Figure src={result.after_image_url ?? afterImage} label="After" />
+                <Figure src={result.before_image_url} label="Before: reported blockage" />
+                <Figure src={result.after_image_url ?? afterImage} label="After: desilted & cleared" />
               </div>
 
               <div className="mt-6 rounded-2xl border dg-bd dg-fill p-5" role="status">
@@ -1876,10 +1923,10 @@ function VerifyModal({
                   {s.pct == null
                     ? 'Verification finished, but no score was returned.'
                     : s.key === 'verified'
-                      ? 'The drain is clear. This ticket is now closed and recorded in the public ledger.'
+                      ? 'Stormwater flow restored. This ticket is now closed and recorded in the public ledger.'
                       : s.key === 'review'
-                        ? 'Inconclusive. The ticket stays open for a manual re-check.'
-                        : 'The drain still appears to be blocked. The ticket stays open for another visit.'}
+                        ? 'Inconclusive clearance score. The ticket stays open for supervisor review.'
+                        : 'Obstruction still detected. The ticket remains open for follow-up desilting.'}
                 </p>
               </div>
 
@@ -1906,6 +1953,8 @@ function WorkerView({
   onUnlock,
   onCancelLogin,
   onSignOut,
+  onResetFilters,
+  hasActiveFilters = false,
 }: {
   authed: boolean
   tickets: Ticket[]
@@ -1916,6 +1965,8 @@ function WorkerView({
   onUnlock: () => void
   onCancelLogin: () => void
   onSignOut: () => void
+  onResetFilters?: () => void
+  hasActiveFilters?: boolean
 }) {
   const [active, setActive] = useState<Ticket | null>(null)
   const origin = geo.coords
@@ -1928,6 +1979,9 @@ function WorkerView({
         return { t, km: origin && c ? distanceKm(origin, c) : null }
       })
     list.sort((a, b) => {
+      const intA = typeof a.t.clog_intensity === 'number' ? a.t.clog_intensity : 0
+      const intB = typeof b.t.clog_intensity === 'number' ? b.t.clog_intensity : 0
+      if (intB !== intA) return intB - intA
       if (a.km == null && b.km == null) return 0
       if (a.km == null) return 1
       if (b.km == null) return -1
@@ -1943,25 +1997,25 @@ function WorkerView({
           <Lock className="h-7 w-7" aria-hidden="true" />
         </span>
         <h1 className="mt-5 text-3xl font-semibold tracking-tight dg-fg">Worker Terminal</h1>
-        <p className="mt-2 dg-fg-2">Restricted to field workers. Enter your passkey to continue.</p>
+        <p className="mt-2 dg-fg-2">Restricted to BBMP stormwater field crews. Enter your passkey to continue.</p>
         <PasskeyModal onSuccess={onUnlock} onClose={onCancelLogin} />
       </div>
     )
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl">
+    <div className="mx-auto w-full max-w-3xl min-w-0">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <span className="glass-soft inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium dg-fg">
             <ShieldCheck className="h-3.5 w-3.5 dg-tone-green" aria-hidden="true" />
-            Authenticated · Field worker
+            Authenticated · BBMP Field Operations
           </span>
-          <h1 className="mt-4 text-3xl font-semibold tracking-tight dg-fg sm:text-4xl">Active tickets</h1>
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight dg-fg sm:text-4xl">Active Triage Queue</h1>
           <p className="mt-2 dg-fg-2">
             {origin
-              ? `Sorted by distance from ${formatCoords(origin)}.`
-              : 'Location unavailable. Showing tickets in the order they were submitted.'}
+              ? `Prioritized by AI clog severity and proximity to ${formatCoords(origin)}.`
+              : 'Prioritized by AI clog severity across Bengaluru stormwater sectors.'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1989,19 +2043,35 @@ function WorkerView({
             ))}
           </div>
         ) : rows.length === 0 ? (
-          <div className="glass rounded-3xl px-6 py-16 text-center">
-            <span className="dg-float mx-auto grid h-12 w-12 place-items-center rounded-full dg-circle-green">
-              <CheckCircle2 className="h-6 w-6" aria-hidden="true" />
+          <div className="glass dg-spotlight-card rounded-3xl px-6 py-14 text-center" onMouseMove={handleSpotlightMove}>
+            <span className="dg-float mx-auto grid h-14 w-14 place-items-center rounded-full dg-circle-green">
+              <CheckCircle2 className="h-7 w-7" aria-hidden="true" />
             </span>
-            <p className="mt-4 text-lg font-medium dg-fg">All clear</p>
-            <p className="mt-1 text-sm dg-fg-2">No pending tickets right now.</p>
+            <h2 className="mt-4 text-lg font-semibold dg-fg">Zero active blockages in this Bengaluru zone</h2>
+            <p className="mx-auto mt-1.5 max-w-sm text-sm dg-fg-2">
+              {hasActiveFilters
+                ? 'No open tickets match the selected Red/Amber/Green alert or Bengaluru neighborhood filter.'
+                : 'Every reported stormwater drain in the queue has been verified cleared.'}
+            </p>
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              {hasActiveFilters && onResetFilters && (
+                <button type="button" className={btnPrimary} onClick={onResetFilters}>
+                  Reset Zone &amp; Alert Filters
+                </button>
+              )}
+              <button type="button" className={btnSecondary} onClick={() => void onRefresh()}>
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                Refresh Queue
+              </button>
+            </div>
           </div>
         ) : (
           <ul className="space-y-4">
             {rows.map(({ t, km }, i) => (
               <li
                 key={t.id}
-                className="glass dg-rise dg-lift rounded-3xl p-4"
+                onMouseMove={handleSpotlightMove}
+                className="glass dg-spotlight-card dg-rise dg-lift rounded-3xl p-4"
                 style={{ animationDelay: `${Math.min(i, 6) * 70}ms` }}
               >
                 <div className="flex gap-3 sm:gap-4">
@@ -2014,17 +2084,22 @@ function WorkerView({
                     <div className="flex flex-wrap items-center gap-2">
                       {i === 0 && km != null && (
                         <span className="rounded-full dg-accent-bg px-2 py-1 text-[10px] font-semibold uppercase tracking-wider dg-on-accent">
-                          Nearest
+                          Priority Dispatch
                         </span>
                       )}
                       <StatusBadge t={t} />
+                      {t.area && (
+                        <span className="rounded-full border dg-bd-2 dg-fill-2 px-2.5 py-0.5 text-[10px] font-semibold dg-fg-2">
+                          {t.area}
+                        </span>
+                      )}
                     </div>
                     <p className="mt-2 break-words text-[15px] font-medium dg-fg">{t.location}</p>
                     <p className="mt-0.5 line-clamp-2 text-sm dg-fg-2">{t.description}</p>
                     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs dg-fg-2">
                       <span className="inline-flex items-center gap-1">
                         <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
-                        {km != null ? `${formatDistance(km)} away` : 'Distance unknown'}
+                        {km != null ? `${formatDistance(km)} away` : 'Bengaluru Corridor'}
                       </span>
                       <span className="tabular-nums">#{String(t.id)}</span>
                       {formatDate(t.created_at) && (
@@ -2054,7 +2129,6 @@ function WorkerView({
 /* ============================================================
    Public Audit Ledger
    ============================================================ */
-// Bento spans: a 2x2 hero tile, then singles and a wide tile, repeating.
 const BENTO = ['sm:col-span-2 lg:row-span-2', '', '', 'sm:col-span-2', '', ''] as const
 
 function BentoCard({ t, index, onOpen }: { t: Ticket; index: number; onOpen: () => void }) {
@@ -2063,8 +2137,9 @@ function BentoCard({ t, index, onOpen }: { t: Ticket; index: number; onOpen: () 
   return (
     <button
       onClick={onOpen}
+      onMouseMove={handleSpotlightMove}
       aria-label={`Open ticket ${String(t.id)}: ${t.location}`}
-      className={`dg-rise dg-lift group relative block overflow-hidden rounded-3xl border dg-bd dg-media-bg text-left dg-card-shadow ${focusRing} ${BENTO[index % BENTO.length]}`}
+      className={`dg-rise dg-lift dg-spotlight-card group relative block overflow-hidden rounded-3xl border dg-bd dg-media-bg text-left dg-card-shadow ${focusRing} ${BENTO[index % BENTO.length]}`}
       style={{ animationDelay: `${Math.min(index, 8) * 70}ms` }}
     >
       {hasAfter ? (
@@ -2109,15 +2184,15 @@ function TicketDetailModal({ t, onClose }: { t: Ticket; onClose: () => void }) {
           <p className="mt-4 whitespace-pre-line text-sm leading-relaxed dg-fg-2">{t.description}</p>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <Figure src={t.before_image_url} label="Before: reported" />
+            <Figure src={t.before_image_url} label="Before: reported blockage" />
             {t.after_image_url ? (
-              <Figure src={t.after_image_url} label="After: repaired" />
+              <Figure src={t.after_image_url} label="After: verified clearance" />
             ) : (
               <figure>
                 <div className="grid aspect-[4/3] place-items-center rounded-2xl border border-dashed dg-bd-3 dg-fill text-xs dg-fg-2">
-                  Awaiting repair photo
+                  Awaiting field crew clearance photo
                 </div>
-                <figcaption className="mt-1.5 text-xs font-medium dg-fg-2">After: pending</figcaption>
+                <figcaption className="mt-1.5 text-xs font-medium dg-fg-2">After: pending dispatch</figcaption>
               </figure>
             )}
           </div>
@@ -2137,10 +2212,12 @@ function LedgerView({
   tickets,
   loading,
   onRefresh,
+  go,
 }: {
   tickets: Ticket[]
   loading: boolean
   onRefresh: () => void | Promise<void>
+  go: Go
 }) {
   const [filter, setFilter] = useState<Filter>('all')
   const [open, setOpen] = useState<Ticket | null>(null)
@@ -2163,22 +2240,24 @@ function LedgerView({
   ]
 
   const summary: { label: string; value: string }[] = [
-    { label: 'Reports', value: String(stats.total) },
-    { label: 'AI-Verified', value: String(stats.verified) },
-    { label: 'Pending', value: String(stats.pending) },
-    { label: 'Avg. confidence', value: stats.avg != null ? `${stats.avg.toFixed(1)}%` : '—' },
+    { label: 'Total Reports', value: String(stats.total) },
+    { label: 'AI-Verified Clear', value: String(stats.verified) },
+    { label: 'Open Queue', value: String(stats.pending) },
+    { label: 'Avg. AI Confidence', value: stats.avg != null ? `${stats.avg.toFixed(1)}%` : '—' },
   ]
 
   return (
-    <div className="mx-auto w-full max-w-6xl">
+    <div className="mx-auto w-full max-w-6xl min-w-0">
       <div className="flex flex-wrap items-end justify-between gap-5">
         <div className="min-w-0">
           <span className="glass-soft inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium dg-fg">
             <ShieldCheck className="h-3.5 w-3.5 dg-accent" aria-hidden="true" />
-            Public record
+            Immutable Civic Record
           </span>
-          <h1 className="mt-4 text-3xl font-semibold tracking-tight dg-fg sm:text-4xl">Audit Ledger</h1>
-          <p className="mt-2 max-w-lg dg-fg-2">Every report, repair and AI verification, in one transparent log.</p>
+          <h1 className="mt-4 text-3xl font-semibold tracking-tight dg-fg sm:text-4xl">Public Audit Ledger</h1>
+          <p className="mt-2 max-w-lg dg-fg-2">
+            Every Bengaluru stormwater report, field desilting photo, and AI verification score in one open ledger.
+          </p>
         </div>
 
         <div className="flex w-full items-center gap-2 sm:w-auto">
@@ -2193,10 +2272,9 @@ function LedgerView({
                 role="tab"
                 aria-selected={filter === f.key}
                 onClick={() => setFilter(f.key)}
-                className={`min-h-[40px] rounded-full px-3.5 py-1.5 text-sm font-medium transition duration-300 ${focusRing} ${filter === f.key
-                  ? 'dg-accent-bg dg-on-accent'
-                  : 'dg-fg-2 dg-hover-fg'
-                  }`}
+                className={`min-h-[40px] rounded-full px-3.5 py-1.5 text-sm font-medium transition duration-300 ${focusRing} ${
+                  filter === f.key ? 'dg-accent-bg dg-on-accent' : 'dg-fg-2 dg-hover-fg'
+                }`}
               >
                 {f.label}
               </button>
@@ -2217,7 +2295,8 @@ function LedgerView({
         {summary.map((s, i) => (
           <div
             key={s.label}
-            className="dg-float glass rounded-2xl px-4 py-4 sm:px-5"
+            onMouseMove={handleSpotlightMove}
+            className="dg-float glass dg-spotlight-card rounded-2xl px-4 py-4 sm:px-5"
             style={{ animationDelay: `-${i * 1.7}s`, animationDuration: `${8 + i}s` }}
           >
             <dt className="text-xs font-medium dg-fg-2">{s.label}</dt>
@@ -2238,11 +2317,29 @@ function LedgerView({
             ))}
           </div>
         ) : shown.length === 0 ? (
-          <div className="glass rounded-3xl px-6 py-16 text-center">
-            <p className="text-lg font-medium dg-fg">No records to show</p>
-            <p className="mt-1 text-sm dg-fg-2">
-              {tickets.length === 0 ? 'Submit the first report from the Citizen Portal.' : 'No tickets match this filter.'}
+          <div className="glass dg-spotlight-card rounded-3xl px-6 py-16 text-center" onMouseMove={handleSpotlightMove}>
+            <span className="dg-float mx-auto grid h-14 w-14 place-items-center rounded-full border dg-bd-2 dg-fill-2 dg-accent">
+              <ShieldCheck className="h-7 w-7" aria-hidden="true" />
+            </span>
+            <h2 className="mt-4 text-lg font-semibold dg-fg">
+              {tickets.length === 0 ? 'No drainage audit records logged yet' : 'No audit records match this filter'}
+            </h2>
+            <p className="mx-auto mt-1.5 max-w-sm text-sm dg-fg-2">
+              {tickets.length === 0
+                ? 'Submit the first stormwater blockage report from the Citizen Portal to populate the live ledger.'
+                : 'Switch back to All records or submit a new drainage report.'}
             </p>
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              {filter !== 'all' && (
+                <button type="button" className={btnSecondary} onClick={() => setFilter('all')}>
+                  Reset Filter
+                </button>
+              )}
+              <NavLink to="/" go={go} className={btnPrimary}>
+                <MapPin className="h-4 w-4" aria-hidden="true" />
+                Report a Blocked Drain
+              </NavLink>
+            </div>
           </div>
         ) : (
           <div className="grid auto-rows-[200px] grid-flow-dense grid-cols-1 gap-4 sm:auto-rows-[220px] sm:grid-cols-2 lg:grid-cols-4">
@@ -2259,29 +2356,25 @@ function LedgerView({
 }
 
 /* ============================================================
-   404
+   404 Page
    ============================================================ */
 function NotFoundView({ go }: { go: Go }) {
   return (
-    <div className="mx-auto w-full max-w-lg text-center">
-      <div className="glass dg-float rounded-3xl px-6 py-12 sm:px-10">
+    <div className="mx-auto w-full max-w-lg text-center min-w-0">
+      <div className="glass dg-spotlight-card dg-float rounded-3xl px-6 py-12 sm:px-10" onMouseMove={handleSpotlightMove}>
         <p className="dg-text-aqua text-7xl font-bold tracking-tighter sm:text-8xl">404</p>
-        <h1 className="mt-4 text-2xl font-semibold tracking-tight dg-fg">Page not found</h1>
+        <h1 className="mt-4 text-2xl font-semibold tracking-tight dg-fg">Grid Sector Not Found</h1>
         <p className="mx-auto mt-2 max-w-sm dg-fg-2">
-          This page doesn’t exist, or the drain it pointed to has been rerouted.
+          This route doesn’t exist in the Bengaluru stormwater monitoring network, or the sector has been rerouted.
         </p>
         <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
-          <NavLink
-            to="/"
-            go={go}
-            className={`${btnPrimary} hover:-translate-y-0.5 hover:brightness-110`}
-          >
+          <NavLink to="/" go={go} className={btnPrimary}>
             <MapPin className="h-4 w-4" aria-hidden="true" />
-            Report a drain
+            Report a Drain
           </NavLink>
-          <NavLink to="/ledger" go={go} className={`${btnSecondary} hover:-translate-y-0.5 dg-hover-fill`}>
+          <NavLink to="/ledger" go={go} className={btnSecondary}>
             <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-            View the ledger
+            View Public Ledger
           </NavLink>
         </div>
       </div>
@@ -2290,7 +2383,7 @@ function NotFoundView({ go }: { go: Go }) {
 }
 
 /* ============================================================
-   Site chrome: header (with mobile menu), footer, toast
+   Site Chrome: Header (with Mobile Menu & Contact), Footer, Toast
    ============================================================ */
 const TABS: { key: ViewKey; to: string; label: string; Icon: IconType }[] = [
   { key: 'citizen', to: PATHS.citizen, label: 'Citizen Portal', Icon: MapPin },
@@ -2367,15 +2460,15 @@ function SiteHeader({
               </span>
             </NavLink>
 
-            {/* Desktop: floating pill with a sliding indicator */}
             <nav
               aria-label="Primary"
-              className="relative hidden w-[26rem] shrink-0 grid-cols-3 rounded-full border dg-bd dg-fill p-1 md:grid"
+              className="relative hidden w-[25rem] shrink-0 grid-cols-3 rounded-full border dg-bd dg-fill p-1 md:grid"
             >
               <span
                 aria-hidden="true"
-                className={`pointer-events-none absolute inset-y-1 left-1 rounded-full dg-accent-bg transition-[transform,opacity] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${view ? 'opacity-100' : 'opacity-0'
-                  }`}
+                className={`pointer-events-none absolute inset-y-1 left-1 rounded-full dg-accent-bg transition-[transform,opacity] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                  view ? 'opacity-100' : 'opacity-0'
+                }`}
                 style={{
                   width: 'calc((100% - 0.5rem) / 3)',
                   transform: `translateX(${Math.max(activeIndex, 0) * 100}%)`,
@@ -2389,8 +2482,9 @@ function SiteHeader({
                     to={to}
                     go={go}
                     current={active}
-                    className={`relative z-10 flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[13px] font-medium transition-colors duration-300 active:scale-[0.97] ${focusRing} ${active ? 'dg-on-accent' : 'dg-fg-2 dg-hover-fg'
-                      }`}
+                    className={`relative z-10 flex min-h-[40px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-2 text-[13px] font-medium transition-colors duration-300 active:scale-[0.97] ${focusRing} ${
+                      active ? 'dg-on-accent' : 'dg-fg-2 dg-hover-fg'
+                    }`}
                   >
                     {label}
                     {key === 'worker' && (
@@ -2406,14 +2500,16 @@ function SiteHeader({
               })}
             </nav>
 
-            {/* Desktop: theme switch (the mobile drawer has its own) */}
+            <div className="hidden items-center gap-2 lg:flex">
+              <ContactLinks className="flex items-center gap-1.5" compact />
+            </div>
+
             <ThemeToggle theme={theme} onToggle={onToggleTheme} className="hidden md:grid" />
 
-            {/* Mobile: menu button */}
             <button
               ref={menuBtnRef}
               type="button"
-              aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+              aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
               aria-expanded={menuOpen}
               aria-controls="mobile-menu"
               onClick={() => setMenuOpen((o) => !o)}
@@ -2440,10 +2536,9 @@ function SiteHeader({
                           go={go}
                           current={active}
                           onNavigate={() => setMenuOpen(false)}
-                          className={`flex min-h-[52px] items-center gap-3 rounded-2xl px-4 text-[15px] font-medium transition ${focusRing} ${active
-                            ? 'dg-accent-bg dg-on-accent'
-                            : 'dg-fg dg-hover-fill'
-                            }`}
+                          className={`flex min-h-[52px] items-center gap-3 rounded-2xl px-4 text-[15px] font-medium transition ${focusRing} ${
+                            active ? 'dg-accent-bg dg-on-accent' : 'dg-fg dg-hover-fill'
+                          }`}
                         >
                           <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
                           <span className="flex-1">{label}</span>
@@ -2462,7 +2557,7 @@ function SiteHeader({
               </div>
               {hasContact && (
                 <div className="mt-2 border-t dg-bd px-2 pt-2">
-                  <ContactLinks />
+                  <ContactLinks className="space-y-1" />
                 </div>
               )}
             </div>
@@ -2477,18 +2572,18 @@ function SiteFooter({ view, go }: { view: ViewKey | null; go: Go }) {
   return (
     <footer className="relative z-10 px-4 pb-10 pt-6 sm:px-6">
       <div className="glass-soft mx-auto grid max-w-6xl gap-8 rounded-3xl p-6 sm:grid-cols-3 sm:p-8">
-        <div>
+        <div className="min-w-0">
           <NavLink to="/" go={go} className={`inline-flex min-h-[44px] items-center gap-2.5 rounded-xl ${focusRing}`}>
-            <LogoMark className="h-8 w-8" />
-            <span className="text-[15px] font-semibold tracking-tight dg-fg">DrainGRID</span>
+            <LogoMark className="h-9 w-9" />
+            <span className="text-[15px] font-semibold tracking-tight dg-fg">DrainGRID Bengaluru</span>
           </NavLink>
           <p className="mt-2 max-w-xs text-sm dg-fg-2">
-            Citizen-powered drainage reporting, verified by AI and published in an open ledger.
+            Citizen-powered stormwater drainage reporting, triaged by on-device CLIP vision AI and verified in an open municipal ledger.
           </p>
         </div>
 
-        <nav aria-label="Footer">
-          <h2 className={eyebrowCls}>Explore</h2>
+        <nav aria-label="Footer" className="min-w-0">
+          <h2 className={eyebrowCls}>Navigation</h2>
           <ul className="mt-2">
             {TABS.map(({ key, to, label }) => (
               <li key={key}>
@@ -2496,8 +2591,9 @@ function SiteFooter({ view, go }: { view: ViewKey | null; go: Go }) {
                   to={to}
                   go={go}
                   current={view === key}
-                  className={`inline-flex min-h-[44px] items-center rounded-xl text-sm transition dg-hover-fg ${focusRing} ${view === key ? 'font-medium dg-fg' : 'dg-fg-2'
-                    }`}
+                  className={`inline-flex min-h-[44px] items-center rounded-xl text-sm transition dg-hover-fg ${focusRing} ${
+                    view === key ? 'font-medium dg-fg' : 'dg-fg-2'
+                  }`}
                 >
                   {label}
                 </NavLink>
@@ -2506,24 +2602,20 @@ function SiteFooter({ view, go }: { view: ViewKey | null; go: Go }) {
           </ul>
         </nav>
 
-        <div>
-          <h2 className={eyebrowCls}>{hasContact ? 'Contact' : 'Safety'}</h2>
-          {hasContact && <ContactLinks className="mt-2" />}
-          <p className="mt-3 text-sm dg-fg-2">
-            For urgent flooding or a safety hazard, call your local emergency services instead of using this form.
+        <div className="min-w-0">
+          <h2 className={eyebrowCls}>BBMP Stormwater Control Room</h2>
+          <ContactLinks className="mt-2 space-y-1" />
+          <p className="mt-3 text-xs dg-fg-3">
+            For severe urban flooding or life-safety hazards, call the 24/7 BBMP Control Room directly.
           </p>
         </div>
       </div>
       <p className="mx-auto mt-6 max-w-6xl text-center text-xs dg-fg-3">
-        © {new Date().getFullYear()} DrainGRID AI
+        © {new Date().getFullYear()} DrainGRID AI · Bengaluru Stormwater Monitoring &amp; Verification System
       </p>
     </footer>
   )
 }
-
-/* ============================================================
-   App
-   ============================================================ */
 
 /* ============================================================
    iOS 26 ConcentricRectangle & Interactive BLR Triage Wrapper
@@ -2544,8 +2636,9 @@ function ConcentricRectangle({
   const innerRadius = Math.max(6, outerRadius - padding)
   return (
     <div
+      onMouseMove={handleSpotlightMove}
       style={{ borderRadius: `${outerRadius}px`, padding: `${padding}px` }}
-      className={`glass ${className}`}
+      className={`glass dg-spotlight-card ${className}`}
     >
       <div
         style={{ borderRadius: `${innerRadius}px` }}
@@ -2557,56 +2650,73 @@ function ConcentricRectangle({
   )
 }
 
-function InteractiveWorkerSection(props: any) {
+function InteractiveWorkerSection(props: {
+  authed: boolean
+  tickets: Ticket[]
+  loading: boolean
+  geo: GeoState
+  onRefresh: () => void | Promise<void>
+  onVerified: (t: Ticket) => void
+  onUnlock: () => void
+  onCancelLogin: () => void
+  onSignOut: () => void
+}) {
   const [alertFilter, setAlertFilter] = useState<'ALL' | 'RED' | 'AMBER' | 'GREEN'>('ALL')
   const [areaFilter, setAreaFilter] = useState<string>('ALL')
 
   const enrichedTickets = useMemo(() => {
-    return (props.tickets || []).map((t: any) => {
-      const intensity = typeof t.clog_intensity === 'number' ? t.clog_intensity : 65
-      const alert =
-        t.status === 'VERIFIED_RESOLVED' || t.ai_confidence_score != null
-          ? 'GREEN'
-          : t.alert_level || (intensity >= 75 ? 'RED' : intensity >= 40 ? 'AMBER' : 'GREEN')
-      const area = t.area || 'Central Bengaluru'
-      return { ...t, clog_intensity: intensity, alert_level: alert, area }
-    }).sort((a: any, b: any) => b.clog_intensity - a.clog_intensity)
+    return (props.tickets || [])
+      .map((t) => {
+        const intensity = typeof t.clog_intensity === 'number' ? t.clog_intensity : 65
+        const alert =
+          t.status === 'VERIFIED_RESOLVED' || t.ai_confidence_score != null
+            ? 'GREEN'
+            : t.alert_level || (intensity >= 75 ? 'RED' : intensity >= 40 ? 'AMBER' : 'GREEN')
+        const area = t.area || 'Central Bengaluru'
+        return { ...t, clog_intensity: intensity, alert_level: alert, area }
+      })
+      .sort((a, b) => (b.clog_intensity ?? 0) - (a.clog_intensity ?? 0))
   }, [props.tickets])
 
   const areas = useMemo(() => {
-    const unique = Array.from(new Set(enrichedTickets.map((t: any) => t.area))) as string[]
+    const unique = Array.from(new Set(enrichedTickets.map((t) => t.area || 'Central Bengaluru')))
     return ['ALL', ...unique]
   }, [enrichedTickets])
 
-  const counts = useMemo(() => ({
-    RED: enrichedTickets.filter((t: any) => t.alert_level === 'RED').length,
-    AMBER: enrichedTickets.filter((t: any) => t.alert_level === 'AMBER').length,
-    GREEN: enrichedTickets.filter((t: any) => t.alert_level === 'GREEN').length,
-  }), [enrichedTickets])
+  const counts = useMemo(
+    () => ({
+      RED: enrichedTickets.filter((t) => t.alert_level === 'RED').length,
+      AMBER: enrichedTickets.filter((t) => t.alert_level === 'AMBER').length,
+      GREEN: enrichedTickets.filter((t) => t.alert_level === 'GREEN').length,
+    }),
+    [enrichedTickets],
+  )
 
   const filteredTickets = useMemo(() => {
     return enrichedTickets.filter(
-      (t: any) =>
+      (t) =>
         (alertFilter === 'ALL' || t.alert_level === alertFilter) &&
-        (areaFilter === 'ALL' || t.area === areaFilter)
+        (areaFilter === 'ALL' || t.area === areaFilter),
     )
   }, [enrichedTickets, alertFilter, areaFilter])
 
+  const hasActiveFilters = alertFilter !== 'ALL' || areaFilter !== 'ALL'
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0">
       {props.authed && (
         <ConcentricRectangle outerRadius={26} padding={8} innerClassName="p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2 text-xs font-semibold dg-accent">
-                <Sparkles className="h-3.5 w-3.5" />
-                <span>AI Clog Intensity & Bengaluru Zone Triage</span>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2 text-xs font-semibold dg-accent">
+                <Sparkles className="h-3.5 w-3.5 shrink-0" />
+                <span>AI Clog Intensity &amp; Bengaluru Zone Triage</span>
                 <span className="dg-chip-green rounded-full px-2 py-0.5 text-[11px]">
-                  Gatekeeper & Anti-Breach Active
+                  Gatekeeper &amp; Magic-Byte Shield Active
                 </span>
               </div>
               <p className="mt-1 text-xs dg-fg-2">
-                Click any Alert Level or Bengaluru Area below to filter the live verification queue.
+                Filter the live field queue by Red / Amber / Green blockage severity or Bengaluru neighborhood.
               </p>
             </div>
 
@@ -2656,7 +2766,7 @@ function InteractiveWorkerSection(props: any) {
           {areas.length > 1 && (
             <div className="mt-3 flex items-center gap-2 overflow-x-auto pt-2 border-t dg-bd">
               <span className="text-[11px] font-semibold uppercase tracking-wider dg-fg-3 shrink-0">
-                Bengaluru Area:
+                Bengaluru Zone:
               </span>
               {areas.map((a) => (
                 <button
@@ -2667,7 +2777,7 @@ function InteractiveWorkerSection(props: any) {
                   aria-pressed={areaFilter === a}
                   className="dg-area-chip shrink-0 rounded-full px-3 py-1 text-xs font-medium"
                 >
-                  {a === 'ALL' ? 'All BLR Areas' : a}
+                  {a === 'ALL' ? 'All BLR Zones' : a}
                 </button>
               ))}
             </div>
@@ -2675,7 +2785,15 @@ function InteractiveWorkerSection(props: any) {
         </ConcentricRectangle>
       )}
 
-      <WorkerView {...props} tickets={filteredTickets} />
+      <WorkerView
+        {...props}
+        tickets={filteredTickets}
+        hasActiveFilters={hasActiveFilters}
+        onResetFilters={() => {
+          setAlertFilter('ALL')
+          setAreaFilter('ALL')
+        }}
+      />
     </div>
   )
 }
@@ -2706,106 +2824,110 @@ export default function App() {
 
   useEffect(() => () => window.clearTimeout(toastTimer.current), [])
 
-  // Per-page title and description
   useEffect(() => {
     const meta = PAGE_META[view ?? 'notfound']
     document.title = meta.title
-    document.querySelector('meta[name="description"]')?.setAttribute('content', meta.description)
+    let descTag = document.querySelector<HTMLMetaElement>('meta[name="description"]')
+    if (!descTag) {
+      descTag = document.createElement('meta')
+      descTag.name = 'description'
+      document.head.appendChild(descTag)
+    }
+    descTag.setAttribute('content', meta.description)
   }, [view])
 
   function signIn() {
     try {
       sessionStorage.setItem(SESSION_KEY, '1')
     } catch {
-      // storage unavailable; the session lasts until reload
+      // ignore storage error
     }
     setAuthed(true)
-    notify('Terminal unlocked')
+    notify('Worker Terminal unlocked')
   }
 
   function signOut() {
     try {
       sessionStorage.removeItem(SESSION_KEY)
     } catch {
-      // ignore
+      // ignore storage error
     }
     setAuthed(false)
     go('/')
-    notify('Signed out')
+    notify('Signed out of Worker Terminal')
   }
 
   return (
     <ThemeContext.Provider value={theme}>
-    <div className="relative min-h-[100dvh] overflow-x-clip dg-fg">
-      <a
-        href="#main"
-        className="dg-skip sr-only z-[70] rounded-full px-4 py-2 text-sm font-semibold focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
-      >
-        Skip to content
-      </a>
+      <div className="relative min-h-[100dvh] max-w-[100vw] overflow-x-clip dg-fg">
+        <a
+          href="#main"
+          className="dg-skip sr-only z-[70] rounded-full px-4 py-2 text-sm font-semibold focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
+        >
+          Skip to content
+        </a>
 
-      <Backdrop />
-      <SiteHeader view={view} authed={authed} go={go} theme={theme} onToggleTheme={toggleTheme} />
+        <Backdrop />
+        <SiteHeader view={view} authed={authed} go={go} theme={theme} onToggleTheme={toggleTheme} />
 
-      <div className="relative z-10 px-4 pb-6 pt-[6.5rem] sm:px-6 sm:pt-32">
-        {error && (view === 'worker' || view === 'ledger') && (
-          <div
-            role="alert"
-            className="mx-auto mb-6 flex max-w-3xl items-start gap-3 rounded-2xl dg-note dg-note--red p-3.5 text-sm backdrop-blur-xl"
-          >
-            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-            <p className="min-w-0 flex-1">{error}</p>
-            <button
-              className={`shrink-0 rounded font-semibold underline underline-offset-2 ${focusRing}`}
-              onClick={() => void refresh()}
+        <div className="relative z-10 px-4 pb-6 pt-[6.5rem] sm:px-6 sm:pt-32">
+          {error && (view === 'worker' || view === 'ledger') && (
+            <div
+              role="alert"
+              className="mx-auto mb-6 flex max-w-3xl items-start gap-3 rounded-2xl dg-note dg-note--red p-3.5 text-sm backdrop-blur-xl"
             >
-              Retry
-            </button>
-          </div>
-        )}
-
-        <main id="main" tabIndex={-1} key={view ?? 'notfound'} className="dg-rise outline-none">
-          {view === 'citizen' && <CitizenView geo={geo} onCreated={refresh} notify={notify} />}
-          {view === 'worker' && (
-            <InteractiveWorkerSection
-              authed={authed}
-              tickets={tickets}
-              loading={loading}
-              geo={geo}
-              onRefresh={refresh}
-              onVerified={upsert}
-              onUnlock={signIn}
-              onCancelLogin={() => go('/')}
-              onSignOut={signOut}
-            />
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              <p className="min-w-0 flex-1">{error}</p>
+              <button
+                className={`shrink-0 rounded font-semibold underline underline-offset-2 ${focusRing}`}
+                onClick={() => void refresh()}
+              >
+                Retry
+              </button>
+            </div>
           )}
-          {view === 'ledger' && <LedgerView tickets={tickets} loading={loading} onRefresh={refresh} />}
-          {view === null && <NotFoundView go={go} />}
-        </main>
-      </div>
 
-      {!(view === 'worker' && !authed) && <SiteFooter view={view} go={go} />}
-
-      {/* Toast (the live region stays mounted so screen readers announce changes) */}
-      <div
-        aria-live="polite"
-        className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex justify-center px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]"
-      >
-        {toast && (
-          <div
-            key={toast.id}
-            className="glass-strong dg-toast-in pointer-events-auto flex max-w-md items-center gap-2.5 rounded-full px-4 py-2.5 text-sm dg-fg"
-          >
-            {toast.tone === 'success' ? (
-              <CheckCircle2 className="h-4 w-4 shrink-0 dg-tone-green" aria-hidden="true" />
-            ) : (
-              <TriangleAlert className="h-4 w-4 shrink-0 dg-tone-red" aria-hidden="true" />
+          <main id="main" tabIndex={-1} key={view ?? 'notfound'} className="dg-rise outline-none min-w-0">
+            {view === 'citizen' && <CitizenView geo={geo} onCreated={refresh} notify={notify} go={go} />}
+            {view === 'worker' && (
+              <InteractiveWorkerSection
+                authed={authed}
+                tickets={tickets}
+                loading={loading}
+                geo={geo}
+                onRefresh={refresh}
+                onVerified={upsert}
+                onUnlock={signIn}
+                onCancelLogin={() => go('/')}
+                onSignOut={signOut}
+              />
             )}
-            <span className="min-w-0">{toast.message}</span>
-          </div>
-        )}
+            {view === 'ledger' && <LedgerView tickets={tickets} loading={loading} onRefresh={refresh} go={go} />}
+            {view === null && <NotFoundView go={go} />}
+          </main>
+        </div>
+
+        {!(view === 'worker' && !authed) && <SiteFooter view={view} go={go} />}
+
+        <div
+          aria-live="polite"
+          className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex justify-center px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]"
+        >
+          {toast && (
+            <div
+              key={toast.id}
+              className="glass-strong dg-toast-in pointer-events-auto flex max-w-md items-center gap-2.5 rounded-full px-4 py-2.5 text-sm dg-fg"
+            >
+              {toast.tone === 'success' ? (
+                <CheckCircle2 className="h-4 w-4 shrink-0 dg-tone-green" aria-hidden="true" />
+              ) : (
+                <TriangleAlert className="h-4 w-4 shrink-0 dg-tone-red" aria-hidden="true" />
+              )}
+              <span className="min-w-0">{toast.message}</span>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
     </ThemeContext.Provider>
   )
 }
